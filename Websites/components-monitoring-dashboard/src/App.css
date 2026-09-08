@@ -1,0 +1,354 @@
+/* Reset and Base Styles */
+#root {
+  width: 100%;
+  margin: 0;
+  text-align: center;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  
+}
+
+/* This forces inputs, buttons, and textareas to stop using 
+   browser defaults and use your app's font instead */
+input, 
+button, 
+select, 
+textarea, 
+label {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+}
+
+
+/* Ensure the root containers allow for horizontal expansion */
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+}
+
+.main-header {
+    /* Instead of just 100%, we ensure it expands with the content */
+    display: flex;
+    min-width: 100%; 
+    width: max-content; 
+    box-sizing: border-box;
+    position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+/* Full Width Header Styling */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 2rem;
+  height: 80px;
+  background-color: #3b66a6;
+  color: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+header h1 {
+  font-size: 1.8rem;
+  margin: 0;
+}
+
+/* Main Body Container */
+#divBody {
+  padding: 2rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Page Layout synchronization */
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.page-header {
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.page-header h2 {
+  margin: 0;
+}
+
+/* Login form styling */
+.login-container {
+  max-width: 400px;
+  margin: 60px auto;
+  padding: 2rem;
+  background-color: #f9f9f9;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  text-align: left;
+}
+
+.login-container h2 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.login-container form > div {
+  margin-bottom: 1rem;
+}
+
+.login-container label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+  color: #333;
+}
+
+.login-container input {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+/* Table Styling */
+table {
+  width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  background-color: #ffffff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
+}
+
+table th,
+table td {
+  padding: 12px 16px;
+  border: 1px solid #ccc;
+  text-align: left;
+}
+
+table th {
+  background-color: #3b66a6;
+  color: #fff;
+  font-weight: bold;
+}
+
+table tr:hover {
+  background-color: #f2f2f2;
+}
+
+/* Button styling */
+button {
+  padding: 0.7rem 1.5rem;
+  border-radius: 6px;
+  border: none;
+  background-color: #3b66a6;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease-in-out;
+}
+
+button:hover {
+  background-color: #2f5188;
+}
+
+a {
+  color: #3b66a6;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Modal and Overlays */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.modal-content {
+  background-color: #f9f9f9;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 2rem;
+  width: 600px;
+  max-height: 90vh;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.modal-content h2, .modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+}
+
+.modal-content form > div {
+  margin-bottom: 1rem;
+}
+
+.modal-content label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
+
+.modal-content input, .modal-content select, .modal-content textarea {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+/* User management form styling */
+.user-container {
+  max-width: 500px;
+  margin: 60px auto;
+  padding: 2rem;
+  background-color: #f9f9f9;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  text-align: left;
+}
+
+/* Header Specifics */
+.main-header {
+  background-color: #2c3e50 !important;
+  color: #ffffff !important;
+}
+
+.header-nav a {
+  color: #bdc3c7 !important;
+  text-decoration: none;
+  font-size: 1rem;
+  transition: 0.3s;
+}
+
+.header-nav a:hover {
+  color: #ffffff !important;
+}
+
+.header-nav a.active {
+  color: #3498db !important;
+  border-bottom: 2px solid #3498db !important;
+}
+
+.logout-button {
+  background-color: #e74c3c !important;
+  color: white !important;
+}
+
+.app-link {
+  color: #3b66a6;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.read-only-field {
+  background-color: #eeeeee !important;
+  cursor: not-allowed;
+}
+
+
+/* Target the modal container to ensure child elements behave */
+.modal-content {
+    box-sizing: border-box;
+}
+
+/* The Magic Rule: 
+   Force all inputs, selects, and textareas to include padding 
+   inside the 100% width calculation.
+*/
+.modal-content input[type="text"],
+.modal-content input[type="password"],
+.modal-content input[type="number"],
+.modal-content select,
+.modal-content textarea {
+    width: 100% !important;   /* Occupy full width of the container */
+    box-sizing: border-box !important; /* Padding/Border won't make it wider */
+    padding: 8px 12px;        /* Standardized internal spacing */
+    margin: 5px 0 15px 0;    /* Consistent vertical spacing */
+    display: block;           /* Ensures they sit on their own line */
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+/* Ensure the label sits directly above the input with no weird shifts */
+.modal-content label {
+    display: block;
+    text-align: left;
+    font-weight: bold;
+    margin-bottom: 2px;
+}
+
+/* Fix for the Database section where inputs are side-by-side */
+.database-section div {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+}
+
+/* In the database row, we DON'T want 100% width for individual boxes 
+   because they share a line. This resets them to flex properly.
+*/
+.database-section div input {
+    width: auto !important; 
+    flex: 1; /* This makes them grow to fill the available space together */
+    margin-bottom: 5px !important;
+}
+
+/* Specific fix for textareas to prevent them from being too small */
+.modal-content textarea {
+    min-height: 80px;
+    resize: vertical; /* Allows user to grow it vertically only */
+}
+
+/* Ensure the top header container spans full width */
+.header-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    border-bottom: 2px solid #eee;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* This allows the title to grow without pushing the nav links out of view */
+.header-title-section {
+    flex: 1; 
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis; /* Optional: adds ... if title is way too long */
+    margin-right: 20px;
+}
+
+/* This locks the navigation links to the right */
+.nav-links-section {
+    display: flex;
+    gap: 15px;
+    flex-shrink: 0; /* CRITICAL: Prevents the links from being squashed or moved */
+    white-space: nowrap;
+}

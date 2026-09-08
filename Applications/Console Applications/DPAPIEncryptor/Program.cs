@@ -1,0 +1,36 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.IO;
+
+namespace DPAPIEncryptor
+{
+	class Program
+	{
+		static void Main(string[] args)
+		{
+			string pepper = ConfigurationManager.AppSettings["dpapi_pepper_string"];
+
+			var encryptedPepper = DpapiHelper.Encrypt(pepper);
+
+         string filePath =ConfigurationManager.AppSettings["file_output"];
+
+         try
+         {
+            File.WriteAllText(filePath, encryptedPepper);
+
+            Console.WriteLine($"Successfully saved to {Path.GetFullPath(filePath)}");
+         }
+         catch (Exception ex)
+         {
+            Console.WriteLine($"An error occurred while writing to the file: {ex.Message}");
+         }
+         Console.Write("Press any key to continue...");
+         Console.ReadKey();
+
+      }
+	}
+}

@@ -1,0 +1,1063 @@
+﻿using ComponentsMonitoring.BLL.Interfaces;
+using ComponentsMonitoring.Helpers;
+using DAL.Interfaces;
+using DAL.Repositories;
+using Dg3.CommonLibraries;
+using Microsoft.Win32.TaskScheduler;
+using ModelsLibrary.Models.CustomExceptions;
+using ModelsLibrary.Models.Enums;
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Diagnostics.Eventing.Reader;
+using System.IO;
+using System.Linq;
+using System.Net.Mail;
+using System.ServiceProcess;
+using System.Text;
+using System.Threading.Tasks;
+using WinTask = Microsoft.Win32.TaskScheduler.Task;
+
+namespace ComponentsMonitoring.BLL.Services
+{
+   public class ComponentMonitoringService : IComponentMonitoringService
+   {
+      private IApplicationRepository _applicationRepository;
+      private static LogWriter LOGGER = new LogWriter();
+
+      public ComponentMonitoringService()
+      {
+         _applicationRepository = new ApplicationRepository();
+      }
+
+      public void ProcessScheduledTasks()
+      {
+         try
+         {
+            LOGGER.Info("Starting Scheduled Task Checking");
+            var list = _applicationRepository.GetAll("scheduled task");
+
+            // Tuple schema: Item1 = Id, Item2 = AppName, Item3 = TaskName, Item4 = ServerName
+            var appsToMonitor = new List<Tuple<string, string, string, string>>();
+            foreach (var l in list)
+            {
+               // Assuming l.Server_Name exists. Default to null/empty if local
+               appsToMonitor.Add(new Tuple<string, string, string, string>(l.Id, l.Application_Name, l.URL_Or_App_Name, l.IP_Address));
+            }
+
+            CheckScheduledTasks(appsToMonitor);
+            LOGGER.Info("Checking Scheduled Task Complete");
+         }
+         catch (Exception ex)
+         {
+            LOGGER.Info("ProcessScheduledTasks has encountered an error. Exception: " + ex.Message + "; Inner Exception: " + (ex.InnerException == null ? "" : ex.InnerException.Message));
+            LogWriter log = new LogWriter();
+            log.Error(ex);
+         }
+      }
+
+      private void CheckScheduledTasks(List<Tuple<string, string, string, string>> taskNames)
+      {
+         foreach (var taskData in taskNames)
+         {
+            string taskId = taskData.Item1;
+            string appName = taskData.Item2;
+            string taskName = taskData.Item3;
+            string serverName = string.IsNullOrWhiteSpace(taskData.Item4) ? null : taskData.Item4; // Null forces local machine execution
+
+            // Initialize TaskService targeting the specific remote server
+            using (TaskService ts = new TaskService(serverName))
+            {
+               try
+               {
+                  LOGGER.Info($"Checking scheduled task {taskName} on server {serverName ?? "Local"}");
+                  WinTask t = ts.GetTask(taskName);
+                  int errorCount = 0;
+
+                  if (t == null)
+                  {
+                     LOGGER.Info($"Scheduled task {taskName} was not found on server {serverName ?? "Local"}.");
+                     NotifyFailure(appName, $"A scheduled task was not found on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}");
+                     continue;
+                  }
+
+                  var app = _applicationRepository.Get(taskId);
+
+                  // 1. Check if the task is Disabled
+                  if (!t.Enabled)
+                  {
+                     LOGGER.Info($"Scheduled task {taskName} on {serverName ?? "Local"} was detected as Disabled");
+
+                     if (app.Working_Status == (int)WorkingStatus.Working)
+                     {
+                        app.Working_Status = (int)WorkingStatus.NotWorking;
+                        app.Is_Enabled = false;
+                        _applicationRepository.Update(app);
+                     }
+                     NotifyFailure(appName, $"A scheduled task was detected as Disabled on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}");
+
+                     errorCount++;
+                     continue;
+                  }
+                  else
+                  {
+                     app.Is_Enabled = true;
+                     _applicationRepository.Update(app);
+                  }
+
+                  // 2. Check if the task is currently Running
+                  if (t.State == TaskState.Running)
+                  {
+                     LOGGER.Info($"Scheduled task {taskName} on {serverName ?? "Local"} is currently running.");
+                     continue;
+                  }
+
+                  // 3. Check the last result code (0 = Success)
+                  if (t.LastTaskResult != 0 && t.LastTaskResult != 267011)
+                  {
+                     string taskErrorMessage = GetTaskErrorMessage(taskName, serverName);
+                     LOGGER.Info($"Scheduled task {taskName} on {serverName ?? "Local"} has failed with Exit Code: {t.LastTaskResult}." + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
+
+                     if (app.Working_Status == (int)WorkingStatus.Working)
+                     {
+                        app.Working_Status = (int)WorkingStatus.NotWorking;
+                        _applicationRepository.Update(app);
+                     }
+
+                     NotifyFailure(appName, $"A scheduled task has failed with Exit Code: {t.LastTaskResult} on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}" + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
+
+                     errorCount++;
+                     continue;
+                  }
+
+                  // Expected Interval Triggers Check
+                  TimeSpan? expectedInterval = GetTaskInterval(t);
+                  if (expectedInterval.HasValue)
+                  {
+                     double graceMultiplier = 1.0;
+                     double maxAllowedMinutes = expectedInterval.Value.TotalMinutes * graceMultiplier;
+                     double actualMinutesSinceRun = (DateTime.Now - t.LastRunTime).TotalMinutes;
+
+                     if (actualMinutesSinceRun > maxAllowedMinutes)
+                     {
+                        string taskErrorMessage = GetTaskErrorMessage(taskName, serverName);
+                        LOGGER.Info($"Scheduled task {taskName} on {serverName ?? "Local"} has failed to run on its schedule. Last run was {actualMinutesSinceRun:F0}m ago.");
+
+                        if (app.Working_Status == (int)WorkingStatus.Working)
+                        {
+                           app.Working_Status = (int)WorkingStatus.NotWorking;
+                           _applicationRepository.Update(app);
+                        }
+
+                        NotifyFailure(appName, $"A scheduled task has failed to run on its schedule on server: {serverName ?? "Local"}. Last run was {actualMinutesSinceRun:F0}m ago.<br/>Task Name: {taskName}");
+                        errorCount++;
+                     }
+                  }
+
+                  if (errorCount < 1)
+                  {
+                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
+                     {
+                        app.Working_Status = (int)WorkingStatus.Working;
+                        _applicationRepository.Update(app);
+                     }
+                  }
+               }
+               catch (Exception ex)
+               {
+                  LOGGER.Info($"CheckScheduledTasks encountered an error on server {serverName ?? "Local"} while checking {taskName}: {ex.Message}");
+                  LogWriter log = new LogWriter();
+                  log.Error(ex);
+               }
+            }
+         }
+      }
+
+      private TimeSpan? GetTaskInterval(WinTask t)
+      {
+         TimeSpan? shortestInterval = null;
+         foreach (var trigger in t.Definition.Triggers)
+         {
+            TimeSpan? currentInterval = null;
+            if (trigger.Repetition.Interval != TimeSpan.Zero)
+            {
+               currentInterval = trigger.Repetition.Interval;
+            }
+            else if (trigger is DailyTrigger)
+            {
+               currentInterval = TimeSpan.FromDays(1);
+            }
+            else if (trigger is WeeklyTrigger)
+            {
+               currentInterval = TimeSpan.FromDays(7);
+            }
+
+            if (currentInterval.HasValue && (shortestInterval == null || currentInterval < shortestInterval))
+            {
+               shortestInterval = currentInterval;
+            }
+         }
+         return shortestInterval;
+      }
+
+      private string GetTaskErrorMessage(string taskName, string serverName)
+      {
+         try
+         {
+            string logPath = "Microsoft-Windows-TaskScheduler/Operational";
+            string query = $"*[System[TimeCreated[timediff(@SystemTime) <= 86400000]] and EventData[Data[@Name='TaskName']='\\{taskName}']]";
+
+            // Establish remote target if serverName is provided
+            EventLogSession session = string.IsNullOrEmpty(serverName) ? null : new EventLogSession(serverName);
+            EventLogQuery eventsQuery = new EventLogQuery(logPath, PathType.LogName, query)
+            {
+               Session = session,
+               ReverseDirection = true
+            };
+
+            using (EventLogReader reader = new EventLogReader(eventsQuery))
+            {
+               EventRecord record = reader.ReadEvent();
+               if (record != null)
+               {
+                  return record.FormatDescription();
+               }
+            }
+         }
+         catch (Exception ex)
+         {
+            LOGGER.Info($"Could not retrieve remote event log details: {ex.Message}");
+         }
+
+         return "No specific system error logged recently.";
+      }
+
+      public void ProcessWindowsServices()
+      {
+         try
+         {
+            LOGGER.Info("Starting Windows Services Checking");
+            var list = _applicationRepository.GetAll("windows service");
+
+            // Tuple schema: Item1 = Id, Item2 = AppName, Item3 = ServiceName, Item4 = ServerName
+            var appsToMonitor = new List<Tuple<string, string, string, string>>();
+            foreach (var l in list)
+            {
+               appsToMonitor.Add(new Tuple<string, string, string, string>(l.Id, l.Application_Name, l.URL_Or_App_Name, l.IP_Address));
+            }
+
+            CheckWindowsServices(appsToMonitor);
+            LOGGER.Info("Checking Windows Services Complete");
+         }
+         catch (Exception ex)
+         {
+            LOGGER.Info("ProcessWindowsServices has encountered an error. Exception: " + ex.Message);
+            LogWriter log = new LogWriter();
+            log.Error(ex);
+         }
+      }
+
+      private void CheckWindowsServices(List<Tuple<string, string, string, string>> serviceNames)
+      {
+         foreach (var serviceData in serviceNames)
+         {
+            string serverName = string.IsNullOrWhiteSpace(serviceData.Item4) ? "." : serviceData.Item4; // Use "." for local machine in ServiceController
+
+            try
+            {
+               /*
+               // Passing the server name as the second argument scales it remotely
+               using (ServiceController sc = new ServiceController(serviceData.Item3, serverName))
+               {
+                  sc.Refresh();
+                  var app = _applicationRepository.Get(serviceData.Item1);
+
+                  if (sc.Status == ServiceControllerStatus.Running)
+                  {
+                     LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is running.");
+                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
+                     {
+                        app.Working_Status = (int)WorkingStatus.Working;
+                        app.Service_Status = "Running";
+                        _applicationRepository.Update(app);
+                     }
+                  }
+                  else
+                  {
+                     LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is stopped.");
+
+                     if (app.Working_Status == (int)WorkingStatus.Working)
+                     {
+                        app.Working_Status = (int)WorkingStatus.NotWorking;
+                        app.Service_Status = "Stopped";
+                        _applicationRepository.Update(app);
+                     }
+
+                     NotifyFailure(serviceData.Item2, $"A Windows service was detected as {sc.Status.ToString()} on server: {serverName}.<br/>Service Name: {serviceData.Item3}");
+                  }
+               }
+               */
+
+               using (ServiceController sc = new ServiceController(serviceData.Item3, serverName))
+               {
+                  sc.Refresh();
+                  var app = _applicationRepository.Get(serviceData.Item1);
+
+                  // 1. Check the Startup Type first
+                  ServiceStartMode startMode = sc.StartType;
+
+                  if (startMode == ServiceStartMode.Disabled)
+                  {
+                     LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is Disabled. Skipping check.");
+                     continue; // Don't monitor disabled services
+                  }
+
+                  if (sc.Status == ServiceControllerStatus.Running)
+                  {
+                     LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is running.");
+                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
+                     {
+                        app.Working_Status = (int)WorkingStatus.Working;
+                        app.Service_Status = "Running";
+                        _applicationRepository.Update(app);
+                     }
+                  }
+                  else
+                  {
+                     // 2. It's stopped. checking start mode
+                     if (startMode == ServiceStartMode.Manual)
+                     {
+                        LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is Stopped, but Startup Type is Manual. No alert sent.");
+
+                        //Update DB status to reflect reality without marking it as a "Not Working"
+                        if (app.Service_Status != "Stopped")
+                        {
+                           app.Working_Status = (int)WorkingStatus.Working; // It's working as intended
+                           app.Service_Status = "Stopped";
+                           _applicationRepository.Update(app);
+                        }
+                     }
+                     else //Automatic or Automatic (Delayed Start) and it's stopped
+                     {
+                        LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is stopped.");
+
+                        if (app.Working_Status == (int)WorkingStatus.Working)
+                        {
+                           app.Working_Status = (int)WorkingStatus.NotWorking;
+                           app.Service_Status = "Stopped";
+                           _applicationRepository.Update(app);
+                        }
+
+                        NotifyFailure(serviceData.Item2, $"A Windows service was detected as {sc.Status.ToString()} on server: {serverName}.<br/>Service Name: {serviceData.Item3}");
+                     }
+                  }
+               }
+            }
+            catch (InvalidOperationException ex)
+            {
+               LOGGER.Info($"Windows service {serviceData.Item3} was not found on server {serverName}. Exception: {ex.Message}");
+               var app = _applicationRepository.Get(serviceData.Item1);
+               if (app != null)
+               {
+                  if (app.Working_Status == (int)WorkingStatus.Working)
+                  {
+                     app.Working_Status = (int)WorkingStatus.NotWorking;
+                  }
+                  app.Service_Status = "Stopped";
+                  _applicationRepository.Update(app);
+               }
+
+               NotifyFailure(serviceData.Item2, $"A Windows service was not found on server {serverName}.<br/>Service Name: {serviceData.Item3}");
+            }
+            catch (Exception ex)
+            {
+               LOGGER.Info($"CheckWindowsServices encountered an error on server {serverName} while checking {serviceData.Item3}: {ex.Message}");
+               LogWriter log = new LogWriter();
+               log.Error(ex);
+            }
+         }
+      }
+
+      public void ProcessWebsites()
+      {
+         // Website logic remains identical, since HTTP requests inherently hit external/remote targets over the network.
+         try
+         {
+            LOGGER.Info("Starting Website Checking");
+            var list = _applicationRepository.GetAll("website");
+
+            var urlsToMonitor = new List<Tuple<string, string, string>>();
+            foreach (var l in list)
+            {
+               urlsToMonitor.Add(new Tuple<string, string, string>(l.Id, l.Application_Name, l.URL_Or_App_Name));
+            }
+
+            CheckWebsites(urlsToMonitor);
+            LOGGER.Info("Checking Website Complete");
+         }
+         catch (Exception ex)
+         {
+            LOGGER.Info("ProcessWebsites has encountered an error: " + ex.Message);
+            LogWriter log = new LogWriter();
+            log.Error(ex);
+         }
+      }
+
+      private void CheckWebsites(List<Tuple<string, string, string>> urls)
+      {
+         foreach (var url in urls)
+         {
+            try
+            {
+               LOGGER.Info($"Checking website: {url.Item2},{url.Item3}");
+               var request = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url.Item3);
+               request.Method = "HEAD";
+               request.Timeout = 30000;
+
+               using (var response = (System.Net.HttpWebResponse)request.GetResponse())
+               {
+                  int statusCode = (int)response.StatusCode;
+                  var app = _applicationRepository.Get(url.Item1);
+
+                  if (statusCode >= 200 && statusCode < 400)
+                  {
+                     LOGGER.Info($"Website {url.Item2},{url.Item3} is UP. Status Code: {statusCode}");
+
+                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
+                     {
+                        app.Working_Status = (int)WorkingStatus.Working;
+                        _applicationRepository.Update(app);
+                     }
+                  }
+                  else
+                  {
+                     if (app.Working_Status == (int)WorkingStatus.Working)
+                     {
+                        app.Working_Status = (int)WorkingStatus.NotWorking;
+                        _applicationRepository.Update(app);
+                     }
+                     NotifyFailure(url.Item2, $"Website landing page returned an unexpected status: {statusCode}");
+                  }
+               }
+            }
+            catch (UriFormatException)
+            {
+               LOGGER.Info($"URL Format is invalid for {url.Item2}: {url.Item3}");
+               NotifyFailure(url.Item2, $"The URL provided for {url.Item2} is not a valid format.");
+            }
+            catch (System.Net.WebException wex)
+            {
+               string errorDetails = wex.Message;
+               if (wex.Response != null)
+               {
+                  var errorResponse = (System.Net.HttpWebResponse)wex.Response;
+                  errorDetails = $"{(int)errorResponse.StatusCode} - {errorResponse.StatusDescription}";
+               }
+
+               LOGGER.Info($"Website {url.Item2},{url.Item3} is DOWN. Error: {errorDetails}");
+               NotifyFailure(url.Item2, $"The website landing page is unreachable.<br/>URL: {url.Item3}<br/>Error: {errorDetails}");
+            }
+            catch (Exception ex)
+            {
+               LOGGER.Info($"CheckWebsites has encountered an error while checking {url.Item2},{url.Item3}: {ex.Message}");
+               LogWriter log = new LogWriter();
+               log.Error(ex);
+            }
+         }
+      }
+
+      private void NotifyFailure(string taskname, string message)
+      {
+         SendEmail(taskname, message, null);
+      }
+
+      private void SendEmail(string taskname, string messageBody, byte[] file)
+      {
+         // Original email logic remains unchanged
+         try
+         {
+            byte[] reportContent = file;
+            var region = ConfigurationManager.AppSettings["region"];
+
+            string MAIL_FROM = ConfigurationManager.AppSettings["mail_from"];
+            string MAIL_TO = ConfigurationManager.AppSettings["mail_to"];
+            string MAIL_CC = ConfigurationManager.AppSettings["mail_cc"];
+            string MAIL_BCC = ConfigurationManager.AppSettings["mail_bcc"];
+
+            string MAIL_SUBJECT = string.Format($"[{region}] Component Monitoring Alert: " + taskname);
+
+            StringBuilder msgBody = new StringBuilder();
+            msgBody.AppendLine("<html><body><p>" + messageBody + "</p></body></html>");
+
+            using (MailMessage mailMsg = new MailMessage(MAIL_FROM, MailerHelper.FormatEmailAddresses(MAIL_TO), MAIL_SUBJECT, msgBody.ToString()))
+            {
+               mailMsg.IsBodyHtml = true;
+               if (!string.IsNullOrWhiteSpace(MAIL_CC)) mailMsg.CC.Add(MailerHelper.FormatEmailAddresses(MAIL_CC));
+               if (!string.IsNullOrWhiteSpace(MAIL_BCC)) mailMsg.Bcc.Add(MailerHelper.FormatEmailAddresses(MAIL_BCC));
+
+               MailerHelper.Send(mailMsg);
+            }
+         }
+         catch (Exception ex)
+         {
+            LOGGER.Error(ex.ToString());
+         }
+      }
+   }
+}
+
+//using ComponentsMonitoring.BLL.Interfaces;
+//using ComponentsMonitoring.Helpers;
+//using DAL.Interfaces;
+//using DAL.Repositories;
+//using Dg3.CommonLibraries;
+//using Microsoft.Win32.TaskScheduler;
+//using ModelsLibrary.Models.CustomExceptions;
+//using ModelsLibrary.Models.Enums;
+//using System;
+//using System.Collections.Generic;
+//using System.Configuration;
+//using System.Diagnostics.Eventing.Reader;
+//using System.IO;
+//using System.Linq;
+//using System.Net.Mail;
+//using System.ServiceProcess;
+//using System.Text;
+//using System.Threading.Tasks;
+//using WinTask = Microsoft.Win32.TaskScheduler.Task;
+
+//namespace ComponentsMonitoring.BLL.Services
+//{
+//	public class ComponentMonitoringService : IComponentMonitoringService
+//	{
+//      private IApplicationRepository _applicationRepository;
+//      private static LogWriter LOGGER = new LogWriter();
+
+
+//      public ComponentMonitoringService()
+//		{
+//         _applicationRepository = new ApplicationRepository();
+//      }
+
+//      public void ProcessScheduledTasks()
+//      {
+//         try
+//         {
+//            LOGGER.Info("Starting Scheduled Task Checking");
+//            //get all the registered scheduled tasks
+//            var list = _applicationRepository.GetAll("scheduled task");
+
+//            var appsToMonitor = new List<Tuple<string, string, string>>();
+//            foreach (var l in list)
+//            {
+//               appsToMonitor.Add(new Tuple<string, string, string>(l.Id, l.Application_Name, l.URL_Or_App_Name));
+//            }
+
+//            CheckScheduledTasks(appsToMonitor);
+
+//            LOGGER.Info("Checking Scheduled Task Complete");
+//         }
+//         catch (Exception ex)
+//         {
+//            LOGGER.Info("ProcessScheduledTasks has encountered an error. Exception: " + ex.Message + "; Inner Exception: " + (ex.InnerException==null?"": ex.InnerException.Message));
+
+//            LogWriter log = new LogWriter();
+//            log.Error(ex);
+//         }
+//      }
+
+//      private void CheckScheduledTasks(List<Tuple<string, string, string>> taskNames)
+//      {
+//         using (TaskService ts = new TaskService())
+//         {
+//            foreach (var taskName in taskNames)
+//            {
+//               try
+//               {
+//                  LOGGER.Info($"Checking scheduled task {taskName.Item3}");
+//                  WinTask t = ts.GetTask(taskName.Item3);
+//                  int errorCount = 0;
+//                  if (t == null)
+//                  {
+//                     LOGGER.Info($"Scheduled task {taskName.Item3} was not found on the server.");
+//                     //server and database name (if applicable) to follow
+//                     NotifyFailure(taskName.Item2, $"A scheduled task was not found on the server.<br/>Task Name: {taskName.Item3}");
+//                     continue;
+//                  }
+
+//                  var app = _applicationRepository.Get(taskName.Item1);
+
+
+//                  // 1. Check if the task is Disabled
+//                  if (!t.Enabled)
+//                  {
+//                     LOGGER.Info($"Scheduled task {taskName.Item3} was detected as Disabled");
+//                     //for disabled tasks, send alerts
+//                     //server and database name (if applicable) to follow
+
+
+//                     if (app.Working_Status == (int)WorkingStatus.Working)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.NotWorking;
+//                        app.Is_Enabled = false;
+//                        _applicationRepository.Update(app);
+
+//                     }
+//                     NotifyFailure(taskName.Item2, $"A scheduled task was detected as Disabled.<br/>Task Name: {taskName.Item3}");
+
+
+//                     errorCount++;
+//                     continue;
+//                  }
+//                  else
+//                  {
+//                     app.Is_Enabled = true;
+//                     _applicationRepository.Update(app);
+//                  }
+
+//                  // 2. Check if the task is currently Running
+//                  if (t.State == TaskState.Running)
+//                  {
+//                     //running task. don't send alerts
+//                     LOGGER.Info($"Scheduled task {taskName.Item3} is currently running.");
+//                     continue;
+//                  }
+
+//                  //NOTE: THIS WILL NOT CATCH APPLICATION LEVEL ERROR
+//                  // 3. Check the last result code (0 = Success)
+//                  if (t.LastTaskResult != 0)
+//                  {
+//                     string taskErrorMessage = GetTaskErrorMessage(taskName.Item3);
+//                     LOGGER.Info($"Scheduled task {taskName.Item3} has failed with Exit Code: {t.LastTaskResult}." + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
+
+//                     if (app.Working_Status == (int)WorkingStatus.Working)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.NotWorking;
+//                        _applicationRepository.Update(app);
+//                     }
+
+//                     //server and database name (if applicable) to follow
+//                     NotifyFailure(taskName.Item2, $"A scheduled task has failed with Exit Code: {t.LastTaskResult}.<br/>Task Name: {taskName.Item3}" + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
+
+//                     errorCount++;
+
+//                     continue;
+//                  }
+
+//                  //Get the "Expected Interval" from the Triggers
+//                  TimeSpan? expectedInterval = GetTaskInterval(t);
+
+//                  if (expectedInterval.HasValue)
+//                  {
+//                     //Add a Grace Period (e.g., 20% extra time)
+//                     // e.g If it runs every 60 mins, we allow 72 mins.
+//                     //double graceMultiplier = 1.2;
+//                     //no grace period: 1.0
+//                     double graceMultiplier = 1.0;
+//                     double maxAllowedMinutes = expectedInterval.Value.TotalMinutes * graceMultiplier;
+
+//                     //Compare against Last Run Time
+//                     double actualMinutesSinceRun = (DateTime.Now - t.LastRunTime).TotalMinutes;
+
+//                     if (actualMinutesSinceRun > maxAllowedMinutes)
+//                     {
+//                        string taskErrorMessage = GetTaskErrorMessage(taskName.Item3);
+
+//                        LOGGER.Info($"Scheduled task {taskName.Item3} has failed to run on its schedule. Last run was {actualMinutesSinceRun:F0}m ago." + (!string.IsNullOrEmpty(taskErrorMessage) ? (" Additional error message: " + taskErrorMessage) : ""));
+
+//                        if (app.Working_Status == (int)WorkingStatus.Working)
+//                        {
+//                           app.Working_Status = (int)WorkingStatus.NotWorking;
+//                           _applicationRepository.Update(app);
+//                        }
+
+//                        //server and database name (if applicable) to follow
+//                        NotifyFailure(taskName.Item2, $"A scheduled task has failed to run on its schedule. Last run was {actualMinutesSinceRun:F0}m ago.<br/>Task Name: {taskName.Item3}" + (!string.IsNullOrEmpty(taskErrorMessage) ? (" Additional error message: " + taskErrorMessage) : ""));
+
+//                        errorCount++;
+//                     }
+//                  }
+
+//                  if (errorCount < 1)
+//                  {
+//                     //no issue was found, mark it as working
+//                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.Working;
+//                        _applicationRepository.Update(app);
+//                     }
+
+//                  }
+//               }
+//               catch (Exception ex)
+//               {
+//                  LOGGER.Info($"CheckScheduledTasks has encountered an error while checking {taskName.Item3}: {ex.Message} - {(ex.InnerException == null ? "" : ex.InnerException.Message)}");
+
+//                  LogWriter log = new LogWriter();
+//                  log.Error(ex);
+//               }
+//            }
+//         }
+//      }
+
+//      private TimeSpan? GetTaskInterval(WinTask t)
+//      {
+//         // Check all triggers and find the one that happens most frequently
+//         TimeSpan? shortestInterval = null;
+
+//         foreach (var trigger in t.Definition.Triggers)
+//         {
+//            TimeSpan? currentInterval = null;
+
+//            // Is it a repeating task (e.g., "Every 5 minutes")?
+//            if (trigger.Repetition.Interval != TimeSpan.Zero)
+//            {
+//               currentInterval = trigger.Repetition.Interval;
+//            }
+//            // Is it a Daily Task?
+//            else if (trigger is DailyTrigger)
+//            {
+//               currentInterval = TimeSpan.FromDays(1);
+//            }
+//            // Is it a Weekly Task?
+//            else if (trigger is WeeklyTrigger)
+//            {
+//               currentInterval = TimeSpan.FromDays(7);
+//            }
+
+//            // Keep the shortest one (if a task has multiple triggers)
+//            if (currentInterval.HasValue && (shortestInterval == null || currentInterval < shortestInterval))
+//            {
+//               shortestInterval = currentInterval;
+//            }
+//         }
+//         return shortestInterval;
+//      }
+
+//      private string GetTaskErrorMessage(string taskName)
+//      {
+//         try
+//         {
+//            // Path to the specific Task Scheduler Operational log
+//            string logPath = "Microsoft-Windows-TaskScheduler/Operational";
+
+//            // Query for errors (Level 2) or Warnings (Level 3) related to this task name 
+//            // within the last 24 hours
+//            string query = $"*[System[TimeCreated[timediff(@SystemTime) <= 86400000]] and EventData[Data[@Name='TaskName']='\\{taskName}']]";
+
+//            EventLogQuery eventsQuery = new EventLogQuery(logPath, PathType.LogName, query);
+//            eventsQuery.ReverseDirection = true; // Get newest first
+
+//            using (EventLogReader reader = new EventLogReader(eventsQuery))
+//            {
+//               EventRecord record = reader.ReadEvent();
+//               if (record != null)
+//               {
+//                  // returns description (e.g., "Task Scheduler failed to log on user")
+//                  return record.FormatDescription();
+//               }
+//            }
+//         }
+//         catch (Exception ex)
+//         {
+//            //return "Could not retrieve system error: " + ex.Message;
+//            throw;
+//         }
+
+//         return "No specific system error logged recently.";
+//      }
+
+//      public void ProcessWindowsServices()
+//      {
+//         try
+//         {
+//            LOGGER.Info("Starting Windows Services Checking");
+//            //get all the registered scheduled tasks
+//            var list = _applicationRepository.GetAll("windows service");
+
+
+//            var appsToMonitor = new List<Tuple<string, string, string>>();
+//            foreach (var l in list)
+//            {
+//               appsToMonitor.Add(new Tuple<string, string, string>(l.Id, l.Application_Name, l.URL_Or_App_Name));
+//            }
+
+//            CheckWindowsServices(appsToMonitor);
+
+//            LOGGER.Info("Checking Windows Services Complete");
+//         }
+//         catch (Exception ex)
+//         {
+//            LOGGER.Info("ProcessWindowsServices has encountered an error. Exception: " + ex.Message + "; Inner Exception: " + (ex.InnerException == null ? "" : ex.InnerException.Message));
+
+//            LogWriter log = new LogWriter();
+//            log.Error(ex);
+//         }
+//      }
+
+//      private void CheckWindowsServices(List<Tuple<string, string, string>> serviceNames)
+//      {
+//         foreach (var serviceName in serviceNames)
+//         {
+//            try
+//            {
+//               using (ServiceController sc = new ServiceController(serviceName.Item3))
+//               {
+//                  // We refresh to get the most up-to-date status
+//                  sc.Refresh();
+
+//                  var app = _applicationRepository.Get(serviceName.Item1);
+
+//                  if (sc.Status == ServiceControllerStatus.Running)
+//                  {
+//                     LOGGER.Info($"Windows service {serviceName.Item3} is running.");
+//                     if (app.Working_Status== (int)WorkingStatus.NotWorking)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.Working;
+//                        app.Service_Status = "Running";
+//                        _applicationRepository.Update(app);
+//                     }
+//                  }
+//                  else
+//                  {
+//                     LOGGER.Info($"Windows service {serviceName.Item3} is stopped.");
+
+//                     if (app.Working_Status == (int)WorkingStatus.Working)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.NotWorking;
+
+//                        app.Service_Status = "Stopped";
+//                        _applicationRepository.Update(app);
+
+//                     }
+
+//                     NotifyFailure(serviceName.Item2, $"A Windows service was detected as {sc.Status.ToString()}.<br/>Service Name: {serviceName.Item3}");
+
+//                  }
+//               }
+//            }
+//            catch (InvalidOperationException)
+//            {
+
+//               LOGGER.Info($"Windows service {serviceName.Item3} was not found on the server.");
+
+//               var app = _applicationRepository.Get(serviceName.Item1);
+//               if (app != null)
+//               {
+//                  if (app.Working_Status == (int)WorkingStatus.Working)
+//                  {
+//                     app.Working_Status = (int)WorkingStatus.NotWorking;
+//                  }
+//                  app.Service_Status = "Stopped";
+//                  _applicationRepository.Update(app);
+//               }
+
+//               NotifyFailure(serviceName.Item2, $"A Windows service was not found on the server.<br/>Service Name: {serviceName.Item3}");
+//            }
+//            catch (ArgumentException aex)
+//            {
+//               LOGGER.Info($"CheckWindowsServices has encountered an error while checking {serviceName.Item3}: The service was not found on this server.");
+
+//               NotifyFailure(serviceName.Item2, $"A Windows service was not found on the server.<br/>Service Name: {serviceName.Item3}");
+//            }
+//            catch (Exception ex)
+//            {
+//               LOGGER.Info($"CheckWindowsServices has encountered an error while checking {serviceName.Item3}: {ex.Message} - {(ex.InnerException == null ? "" : ex.InnerException.Message)}");
+
+//               LogWriter log = new LogWriter();
+//               log.Error(ex);
+//            }
+//         }
+//      }
+
+//      public void ProcessWebsites()
+//      {
+//         try
+//         {
+//            LOGGER.Info("Starting Website Checking");
+
+//            // Fetch URLs from your database repository
+//            var list = _applicationRepository.GetAll("website");
+
+//            var urlsToMonitor = new List<Tuple<string,string,string>>();
+//            foreach (var l in list)
+//            {
+//               urlsToMonitor.Add(new Tuple<string, string, string>(l.Id,l.Application_Name,l.URL_Or_App_Name));
+//            }
+
+//            CheckWebsites(urlsToMonitor);
+
+//            LOGGER.Info("Checking Website Complete");
+//         }
+//         catch (Exception ex)
+//         {
+//            LOGGER.Info("ProcessWebsites has encountered an error: " + ex.Message);
+//            LogWriter log = new LogWriter();
+//            log.Error(ex);
+//         }
+//      }
+
+//      private void CheckWebsites(List<Tuple<string, string, string>> urls)
+//      {
+//         foreach (var url in urls)
+//         {
+//            try
+//            {
+//               LOGGER.Info($"Checking website: {url.Item2},{url.Item3}");
+
+//               // Create the request
+//               var request = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url.Item3);
+//               request.Method = "HEAD"; // We use HEAD so we don't download the whole page content
+//               request.Timeout = 30000; // 30 second timeout
+
+//               using (var response = (System.Net.HttpWebResponse)request.GetResponse())
+//               {
+//                  int statusCode = (int)response.StatusCode;
+
+//                  var app = _applicationRepository.Get(url.Item1);
+
+//                  // 2xx and 3xx are considered healthy
+//                  if (statusCode >= 200 && statusCode < 400)
+//                  {
+//                     LOGGER.Info($"Website {url.Item2},{url.Item3} is UP. Status Code: {statusCode}");
+
+//                     if (app.Working_Status== (int)WorkingStatus.NotWorking)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.Working;
+//                        _applicationRepository.Update(app);
+//                     }
+//                  }
+//                  else
+//                  {
+//                     if (app.Working_Status == (int)WorkingStatus.Working)
+//                     {
+//                        app.Working_Status = (int)WorkingStatus.NotWorking;
+//                        _applicationRepository.Update(app);
+
+
+//                     }
+
+//                     NotifyFailure(url.Item2, $"Website landing page returned an unexpected status: {statusCode}");
+
+//                  }
+//               }
+//            }
+//            catch (UriFormatException uriEx)
+//            {
+//               LOGGER.Info($"URL Format is invalid for {url.Item2}: {url.Item3}");
+
+//               NotifyFailure(url.Item2,$"The URL provided for {url.Item2} is not a valid format.");
+//            }
+//            catch (System.Net.WebException wex)
+//            {
+//               // This catches 404, 500, and Connection Failures
+//               string errorDetails = wex.Message;
+//               if (wex.Response != null)
+//               {
+//                  var errorResponse = (System.Net.HttpWebResponse)wex.Response;
+//                  errorDetails = $"{(int)errorResponse.StatusCode} - {errorResponse.StatusDescription}";
+//               }
+
+//               LOGGER.Info($"Website {url.Item2},{url.Item3} is DOWN. Error: {errorDetails}");
+//               NotifyFailure(url.Item2, $"The website landing page is unreachable.<br/>URL: {url.Item3}<br/>Error: {errorDetails}");
+//            }
+//            catch (Exception ex)
+//            {
+//               LOGGER.Info($"CheckWebsites has encountered an error while checking {url.Item2},{url.Item3}: {ex.Message} - {(ex.InnerException == null ? "" : ex.InnerException.Message)}");
+
+//               LogWriter log = new LogWriter();
+//               log.Error(ex);
+//            }
+//         }
+//      }
+
+//      private void NotifyFailure(string taskname,string message) 
+//      {
+//         SendEmail(taskname, message, null);
+//      }
+
+//      //private void SendEmail(LogWriter LOGGER, string messageBody, byte[] file)
+//      private void SendEmail(string taskname, string messageBody, byte[] file)
+//      {
+//         try
+//         {
+//            byte[] reportContent = file;
+//            var region = ConfigurationManager.AppSettings["region"];
+
+//            //Email
+//            string MAIL_FROM = ConfigurationManager.AppSettings["mail_from"];
+//            string MAIL_TO = ConfigurationManager.AppSettings["mail_to"];
+//            string MAIL_CC = ConfigurationManager.AppSettings["mail_cc"];
+//            string MAIL_BCC = ConfigurationManager.AppSettings["mail_bcc"];
+
+//            string MAIL_SUBJECT = string.Format($"[{region}] Component Monitoring Alert: " + taskname);
+
+//            StringBuilder msgBody = new StringBuilder();
+//            msgBody.AppendLine("<html>");
+//            msgBody.AppendLine("<head>");
+//            msgBody.AppendLine("    <style type=\"text/css\">");
+//            msgBody.AppendLine("        body { font-family:Tahoma,Arial,Sans-Serif; font-size:12px; }");
+//            msgBody.AppendLine("        p { font-family:Tahoma,Arial,Sans-Serif; font-size:12px; text-align:left; margin-bottom:10px; }");
+//            msgBody.AppendLine("    </style>");
+//            msgBody.AppendLine("</head>");
+//            msgBody.AppendLine("<body>");
+//            msgBody.Append("<p>");
+//            msgBody.Append(messageBody);
+//            msgBody.Append("</p>");
+//            msgBody.AppendLine("</body>");
+//            msgBody.AppendLine("</html>");
+
+//            using (MailMessage mailMsg = new MailMessage(MAIL_FROM, MailerHelper.FormatEmailAddresses(MAIL_TO), MAIL_SUBJECT, msgBody.ToString()))
+//            {
+//               MemoryStream mstrm = null;
+//               try
+//               {
+//                  mailMsg.IsBodyHtml = true;
+//                  DateTime currentDateTime = DateTime.Now;
+//                  TimeZoneInfo easternTzInfo = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+//                  DateTime easternDateTime = TimeZoneInfo.ConvertTime(currentDateTime, TimeZoneInfo.Local, easternTzInfo);
+
+//                  List<System.Net.Mail.Attachment> attachments = new List<System.Net.Mail.Attachment>();
+
+//                  if (file != null)
+//                  {
+//                     mstrm = new MemoryStream(reportContent);
+//                     if (mstrm != null)
+//                     {
+//                        string filename = string.Format("Dashboard_RolodexDeactivations_" + DateTime.Now.ToString("yyyyMMdd_HHmmss")) + ".xlsx";
+//                        //LOGGER.Info("Sending file " + filename);
+//                        Attachment atch = new Attachment(mstrm, filename);
+//                        mstrm.Seek(0, SeekOrigin.Begin);
+//                        mailMsg.Attachments.Add(atch);
+//                     }
+//                  }
+
+//                  if (!string.IsNullOrWhiteSpace(MAIL_CC))
+//                     mailMsg.CC.Add(MailerHelper.FormatEmailAddresses(MAIL_CC));
+
+//                  if (!string.IsNullOrWhiteSpace(MAIL_BCC))
+//                     mailMsg.Bcc.Add(MailerHelper.FormatEmailAddresses(MAIL_BCC));
+
+//                  MailerHelper.Send(mailMsg);
+//               }
+//               catch (Exception ex)
+//               {
+//                  LOGGER.Error(ex);
+//               }
+//               finally
+//               {
+//                  if (mstrm != null)
+//                     mstrm.Close();
+
+//                  if (mstrm != null)
+//                     mstrm.Dispose();
+//               }
+//            }
+//         }
+//         catch (Exception ex)
+//         {
+//            LOGGER.Error(ex.ToString());
+//         }
+//      }
+//   }
+//}

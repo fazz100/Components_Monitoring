@@ -1,0 +1,6 @@
+C:\billy\usa_repo\ComponentsMonitoringService\Libraries\ModelsLibrary\bin\Release\ModelsLibrary.dll
+C:\billy\usa_repo\ComponentsMonitoringService\Libraries\ModelsLibrary\bin\Release\ModelsLibrary.pdb
+C:\billy\usa_repo\ComponentsMonitoringService\Libraries\ModelsLibrary\obj\Release\ModelsLibrary.csproj.AssemblyReference.cache
+C:\billy\usa_repo\ComponentsMonitoringService\Libraries\ModelsLibrary\obj\Release\ModelsLibrary.csproj.CoreCompileInputs.cache
+C:\billy\usa_repo\ComponentsMonitoringService\Libraries\ModelsLibrary\obj\Release\ModelsLibrary.dll
+C:\billy\usa_repo\ComponentsMonitoringService\Libraries\ModelsLibrary\obj\Release\ModelsLibrary.pdb
