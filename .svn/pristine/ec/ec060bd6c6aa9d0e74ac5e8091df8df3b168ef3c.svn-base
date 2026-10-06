@@ -1,6 +1,0 @@
-{
-  "API_BASE_URL": "https://components-monitoring-dashboard.dg3.com/api",
-  "API_AUTH_TOKEN": "7d39ba4cfae14ecab6942c8e1bc8d160",
-  "DAYS_SILENCE_DURATION":"7"
-}
-

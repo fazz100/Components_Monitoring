@@ -1,6 +1,0 @@
-C:\billy\usa_repo\ComponentsMonitoring\Libraries\ModelsLibrary\bin\Debug\ModelsLibrary.dll
-C:\billy\usa_repo\ComponentsMonitoring\Libraries\ModelsLibrary\bin\Debug\ModelsLibrary.pdb
-C:\billy\usa_repo\ComponentsMonitoring\Libraries\ModelsLibrary\obj\Debug\ModelsLibrary.csproj.CoreCompileInputs.cache
-C:\billy\usa_repo\ComponentsMonitoring\Libraries\ModelsLibrary\obj\Debug\ModelsLibrary.dll
-C:\billy\usa_repo\ComponentsMonitoring\Libraries\ModelsLibrary\obj\Debug\ModelsLibrary.pdb
-C:\billy\usa_repo\ComponentsMonitoring\Libraries\ModelsLibrary\obj\Debug\ModelsLibrary.csproj.AssemblyReference.cache
