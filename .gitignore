@@ -1,21 +1,33 @@
 # Visual Studio & User Settings
 .vs/
+**/[Vv]s/
 *.user
-*.suo
 *.userosscache
+*.suo
+*.userlibraries
 *.sln.docstates
 
 # Legacy Subversion Metadata
 .svn/
+
+# Build & Design-Time Cache Artifacts
+*.cache
+*.mpb
+*.pdb
+*.ilk
+*.idb
 
 # Build Outputs
 [Bb]in/
 [Oo]bj/
 [Dd]ebug/
 [Rr]elease/
+[Aa]rtifacts/
 
 # NuGet Packages & Dependencies
 packages/
+*.nuget.props
+*.nuget.targets
 node_modules/
 
 # Deployment Archives & Temp Files
@@ -23,3 +35,8 @@ node_modules/
 *.7z
 *.rar
 *.log
+Deployment.zip
+
+# Local Environment / User Config
+appsettings.Development.json
+appsettings.Local.json
