@@ -46,7 +46,10 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Dg3.CommonLibraries.LogWriter">
-      <HintPath>..\..\Applications\Scheduled Tasks\ComponentsMonitoring\bin\Debug\Dg3.CommonLibraries.LogWriter.dll</HintPath>
+      <HintPath>..\..\dependencies\Dg3.CommonLibraries.LogWriter.dll</HintPath>
+    </Reference>
+    <Reference Include="Dg3.CommonLibraries.UtilityMethods">
+      <HintPath>..\..\dependencies\Dg3.CommonLibraries.UtilityMethods.dll</HintPath>
     </Reference>
     <Reference Include="Konscious.Security.Cryptography.Argon2, Version=1.3.1.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\..\packages\Konscious.Security.Cryptography.Argon2.1.3.1\lib\net46\Konscious.Security.Cryptography.Argon2.dll</HintPath>
@@ -124,7 +127,9 @@
     <Reference Include="System.Web.Abstractions" />
     <Reference Include="System.Web.Routing" />
     <Reference Include="System.Xml" />
-    <Reference Include="System.Configuration" />
+    <Reference Include="System.Configuration">
+      <Private>True</Private>
+    </Reference>
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="Microsoft.Web.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=MSIL">
       <Private>True</Private>
@@ -186,17 +191,20 @@
     <Compile Include="Areas\HelpPage\XmlDocumentationProvider.cs" />
     <Compile Include="BLL\Interfaces\IApplicationDatabaseService.cs" />
     <Compile Include="BLL\Interfaces\IApplicationExceptionService.cs" />
+    <Compile Include="BLL\Interfaces\IApplicationGroupService.cs" />
     <Compile Include="BLL\Interfaces\IApplicationService.cs" />
     <Compile Include="BLL\Interfaces\IResponseCodeService.cs" />
     <Compile Include="BLL\Interfaces\IUserService.cs" />
     <Compile Include="BLL\Services\ApplicationDatabaseService.cs" />
     <Compile Include="BLL\Services\ApplicationExceptionService.cs" />
+    <Compile Include="BLL\Services\ApplicationGroupService.cs" />
     <Compile Include="BLL\Services\ApplicationService.cs" />
     <Compile Include="BLL\Services\ResponseCodeService.cs" />
     <Compile Include="BLL\Services\UserService.cs" />
     <Compile Include="Controllers\ApplicationController.cs" />
     <Compile Include="Controllers\ApplicationDatabaseController.cs" />
     <Compile Include="Controllers\ApplicationExceptionController.cs" />
+    <Compile Include="Controllers\ApplicationGroupController.cs" />
     <Compile Include="Controllers\CustomApiController.cs" />
     <Compile Include="Controllers\UserController.cs" />
     <Compile Include="Global.asax.cs">

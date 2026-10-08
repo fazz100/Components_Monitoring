@@ -23,6 +23,11 @@ namespace ModelsLibrary.Models
 		public DateTime? Updated_Date { get; set; }
 		public string Updated_By { get; set; }
 		public bool Is_Deleted { get; set; }
+		public string Application_Group_Id { get; set; }
+
+		// joined from application_group, read only
+		public string Application_Group_Name { get; set; }
+		public bool? Application_Group_Is_Deleted { get; set; }
 
 		public List<ApplicationDatabaseModel> Databases { get; set; }
 

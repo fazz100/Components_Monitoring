@@ -27,7 +27,7 @@ async function getHeaders() {
 //     return handleApiResponse(response);
 // }
 
-export async function getApplications({ type = null, appName = null, includeExceptions = true } = {}) {
+export async function getApplications({ type = null, appName = null, includeExceptions = true, includeInactiveGroups = false } = {}) {
     const config = await getConfig();
     
     // 1. Initialize the base URL
@@ -40,6 +40,7 @@ export async function getApplications({ type = null, appName = null, includeExce
 
    // explicit check for true/false since 'false' is a valid value
     if (includeExceptions !== null) params.append('includeExceptions', includeExceptions);
+    if (includeInactiveGroups) params.append('includeInactiveGroups', true);
 
     // 3. Combine them (params.toString() handles the empty case gracefully)
     const queryString = params.toString();

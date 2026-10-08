@@ -12,6 +12,7 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faTrash, faBellSlash, faBell, faSave } from '@fortawesome/free-solid-svg-icons';
 import { createException, getExceptions, deleteException } from '../api/application-exception-api';
+import { getApplicationGroups } from '../api/application-group-api';
 import '../App.css'; 
 import { getConfig } from '../config/config';
 
@@ -38,8 +39,11 @@ function ApplicationList({ type = '' }) {
     const [searchTerm, setSearchTerm] = useState('');     
     const [searchAppType, setSearchAppType] = useState(''); 
     const [searchQuery, setSearchQuery] = useState('');    
-    const [searchAppTypeQuery, setSearchAppTypeQuery] = useState(''); 
-    
+    const [searchAppTypeQuery, setSearchAppTypeQuery] = useState('');
+    const [includeInactiveGroups, setIncludeInactiveGroups] = useState(false);
+
+    const [groups, setGroups] = useState([]); // active application groups for the dropdown
+
     
     // non async config fetching
     const [config, setConfig] = useState(null);
@@ -96,7 +100,8 @@ function ApplicationList({ type = '' }) {
         URL_Or_App_Name: '',
         Is_Enabled: null,
         Service_Status: null,
-        Working_Status: STATUS.WORKING
+        Working_Status: STATUS.WORKING,
+        Application_Group_Id: null
     };
     const [formData, setFormData] = useState(initialForm);
 
@@ -104,7 +109,7 @@ function ApplicationList({ type = '' }) {
     const fetchApps = async () => {
         try {
             const [appRes, exRes] = await Promise.all([
-                getApplications({type:searchAppType, appName:searchQuery}), // Use searchQuery here
+                getApplications({type:searchAppType, appName:searchQuery, includeInactiveGroups}), // Use searchQuery here
                 getExceptions()
             ]);
 
@@ -120,8 +125,19 @@ function ApplicationList({ type = '' }) {
         } catch (err) { console.error(err); }
     };
 
-    // 1. New state for sorting
-    const [sortConfig, setSortConfig] = useState({ key: 'Application_Name', direction: 'asc' });
+    const fetchGroups = async () => {
+        try {
+            const res = await getApplicationGroups();
+            setGroups(res.Data || []);
+        } catch (err) { console.error(err); }
+    };
+
+    useEffect(() => {
+        fetchGroups();
+    }, []);
+
+    // 1. New state for sorting (default: grouped by application group)
+    const [sortConfig, setSortConfig] = useState({ key: 'Application_Group_Name', direction: 'asc' });
 
     // 2. Sorting Logic
     const sortedApps = useMemo(() => {
@@ -132,6 +148,25 @@ function ApplicationList({ type = '' }) {
             sortableItems.sort((a, b) => {
                 let aValue = a[sortConfig.key];
                 let bValue = b[sortConfig.key];
+
+                // --- CUSTOM LOGIC FOR APPLICATION GROUP ---
+                // standalone apps (no group) always go last, ties are sorted by application name
+                if (sortConfig.key === 'Application_Group_Name') {
+                    const groupA = aValue?.toString().toLowerCase() || '';
+                    const groupB = bValue?.toString().toLowerCase() || '';
+
+                    if (groupA !== groupB) {
+                        if (!groupA) return 1;
+                        if (!groupB) return -1;
+                        const groupComparison = groupA < groupB ? -1 : 1;
+                        return sortConfig.direction === 'asc' ? groupComparison : -groupComparison;
+                    }
+
+                    const nameA = a.Application_Name?.toString().toLowerCase() || '';
+                    const nameB = b.Application_Name?.toString().toLowerCase() || '';
+                    return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
+                }
+                // -------------------------------
 
                 // --- CUSTOM LOGIC FOR STATUS ---
                 if (sortConfig.key === 'Working_Status') {
@@ -174,8 +209,8 @@ function ApplicationList({ type = '' }) {
 
     // Now this only fires when 'type' changes or the Search button is clicked
     useEffect(() => { 
-        fetchApps(); 
-    }, [searchAppTypeQuery, searchQuery]);
+        fetchApps();
+    }, [searchAppTypeQuery, searchQuery, includeInactiveGroups]);
 
     const handleSearch = () => {
         setSearchQuery(searchTerm); // This triggers the useEffect above
@@ -185,8 +220,9 @@ function ApplicationList({ type = '' }) {
     const openAddModal = () => {
         setSelectedAppId(null);
         setFormData(initialForm);
-        setDatabases([]); 
+        setDatabases([]);
         setMessage('');
+        fetchGroups();
         setShowModal(true);
     };
 
@@ -201,10 +237,12 @@ function ApplicationList({ type = '' }) {
             URL_Or_App_Name: app.URL_Or_App_Name,
             Is_Enabled: app.Is_Enabled,
             Service_Status: app.Service_Status,
-            Working_Status: app.Working_Status 
+            Working_Status: app.Working_Status,
+            Application_Group_Id: app.Application_Group_Id || null
         });
-        setDatabases(app.Databases || []); 
+        setDatabases(app.Databases || []);
         setMessage('');
+        fetchGroups();
         setShowModal(true);
     };
 
@@ -303,7 +341,7 @@ function ApplicationList({ type = '' }) {
                     connInput.value = '';
                     await fetchApps();
                     // Re-sync local databases state after refresh
-                    const updatedApp = (await getApplications({type:type})).Data.find(a => a.Id === selectedAppId);
+                    const updatedApp = (await getApplications({type:type, includeInactiveGroups: true})).Data.find(a => a.Id === selectedAppId);
                     setDatabases(updatedApp.Databases || []);
                 }
             } catch (err) { 
@@ -352,6 +390,9 @@ function ApplicationList({ type = '' }) {
             }
             if (name === "Working_Status") {
                 nextState.Working_Status = value === "" ? null : parseInt(value, 10);
+            }
+            if (name === "Application_Group_Id") {
+                nextState.Application_Group_Id = value === "" ? null : value;
             }
             return nextState;
         });
@@ -428,6 +469,19 @@ function ApplicationList({ type = '' }) {
                     <div className="form-group">
                         <label>Application Name *</label>
                         <input type="text" name="Application_Name" value={formData.Application_Name} onChange={handleChange} required />
+                    </div>
+                    <div className="form-group">
+                        <label>Application Group</label>
+                        <select name="Application_Group_Id" value={formData.Application_Group_Id || ""} onChange={handleChange}>
+                            <option value="">-- None (Standalone) --</option>
+                            {groups.map(g => <option key={g.Id} value={g.Id}>{g.Application_Group_Name}</option>)}
+                            {/* keep the current group selectable if it was deleted, so saving doesn't drop it */}
+                            {formData.Application_Group_Id && !groups.some(g => g.Id === formData.Application_Group_Id) && (
+                                <option value={formData.Application_Group_Id}>
+                                    {(apps.find(a => a.Id === selectedAppId)?.Application_Group_Name || formData.Application_Group_Id) + ' (inactive)'}
+                                </option>
+                            )}
+                        </select>
                     </div>
                     <div className="form-group">
                         <label>Description *</label>
@@ -605,6 +659,7 @@ function ApplicationList({ type = '' }) {
                 <hr />
                 <div className="read-only-form">
                     <div className="form-group"><label>Name</label><input type="text" value={selectedViewApp?.Application_Name || ''} readOnly /></div>
+                    <div className="form-group"><label>Application Group</label><input type="text" value={selectedViewApp?.Application_Group_Name ? selectedViewApp.Application_Group_Name + (selectedViewApp.Application_Group_Is_Deleted ? ' (inactive)' : '') : 'None (Standalone)'} readOnly /></div>
                     <div className="form-group"><label>Description</label><textarea value={selectedViewApp?.Description || ''} readOnly /></div>
                     <div className="form-group"><label>Type</label><input type="text" value={selectedViewApp?.Application_Type || ''} readOnly /></div>
                     <div className="form-group"><label>Server Name / IP</label><input type="text" value={selectedViewApp?.IP_Address || ''} readOnly /></div>
@@ -738,6 +793,14 @@ function ApplicationList({ type = '' }) {
                     >
                         Clear
                     </button>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '8px 12px', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                        <input
+                            type="checkbox"
+                            checked={includeInactiveGroups}
+                            onChange={(e) => setIncludeInactiveGroups(e.target.checked)}
+                        />
+                        Include Inactive Applications Group
+                    </label>
                 </div>
                 <button onClick={openAddModal}>Add Application</button>
             </div>
@@ -749,6 +812,9 @@ function ApplicationList({ type = '' }) {
                             {/* Make relevant headers clickable for sorting */}
                             <th onClick={() => requestSort('Application_Name')} style={{ cursor: 'pointer' }}>
                                 Application Name
+                            </th>
+                            <th onClick={() => requestSort('Application_Group_Name')} style={{ cursor: 'pointer' }}>
+                                Application Group
                             </th>
                             <th onClick={() => requestSort('Description')} style={{ cursor: 'pointer' }}>
                                 Description
@@ -785,6 +851,9 @@ function ApplicationList({ type = '' }) {
                                     <span className="app-link" onClick={() => openViewModal(app)} style={{ color: '#007bff', cursor: 'pointer', textDecoration: 'none', fontWeight: 'bold' }}>
                                         {app.Application_Name}
                                     </span>
+                                </td>
+                                <td style={app.Application_Group_Is_Deleted ? { color: '#999', fontStyle: 'italic' } : undefined}>
+                                    {app.Application_Group_Name}{app.Application_Group_Is_Deleted ? ' (inactive)' : ''}
                                 </td>
                                 <td>{app.Description}</td>
                                 <td>{app.Application_Type}</td>

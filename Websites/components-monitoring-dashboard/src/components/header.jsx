@@ -87,7 +87,8 @@ function Header() {
       {!isLoginPage && (
         <nav className="header-nav" style={{ display: 'flex', gap: '30px', flexShrink: 0, padding: '0 20px' }}>
           <NavLink to="/Applications" style={({ isActive }) => ({ fontWeight: isActive ? 'bold' : 'normal' })}>Applications</NavLink>
-          <NavLink to="/Exceptions" style={({ isActive }) => ({ fontWeight: isActive ? 'bold' : 'normal' })}>Exceptions</NavLink> 
+          <NavLink to="/ApplicationGroups" style={({ isActive }) => ({ fontWeight: isActive ? 'bold' : 'normal' })}>Application Groups</NavLink>
+          <NavLink to="/Exceptions"style={({ isActive }) => ({ fontWeight: isActive ? 'bold' : 'normal' })}>Exceptions</NavLink> 
           <NavLink to="/User" style={({ isActive }) => ({ fontWeight: isActive ? 'bold' : 'normal' })}>Users</NavLink>
         </nav>
       )}

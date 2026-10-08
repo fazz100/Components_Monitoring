@@ -29,9 +29,9 @@ CREATE TABLE [dbo].[user](
 	[first_name] [nvarchar](100) NULL,
 	[last_name] [nvarchar](100) NULL,
 	[created_date] [datetime] NULL,
-	[created_by] [bigint] NULL,
+	[created_by] [nvarchar](50) NULL,
 	[updated_date] [datetime] NULL,
-	[updated_by] [bigint] NULL,
+	[updated_by] [nvarchar](50) NULL,
 	[is_deleted] [bit] NULL,
 PRIMARY KEY CLUSTERED 
 (
@@ -142,6 +142,18 @@ INSERT INTO [dbo].[response_code]
            ,getdate())
 GO
 
+INSERT INTO [dbo].[response_code]
+           ([code]
+           ,[name]
+           ,[message]
+           ,[created_date])
+     VALUES
+           (902
+           ,'ApplicationGroupExists'
+           ,'Application group name already exists.'
+           ,getdate())
+GO
+
 create table application_exceptions
 (
 id nvarchar(50) not null PRIMARY KEY
@@ -163,6 +175,24 @@ id nvarchar(50) not null PRIMARY KEY
 ,created_date datetime
 )
 
+create table [application_group]
+(
+id nvarchar(50) not null PRIMARY KEY
+,[application_group_name] nvarchar(128) not null
+,[description] nvarchar(256) null
+,application_id nvarchar(50) not null
+,created_by nvarchar(50) null
+,created_date datetime
+,updated_by nvarchar(50) null
+,updated_date datetime null
+,is_deleted bit default 0 not null
+)
+
+ALTER TABLE [dbo].applications
+add [application_group_id] nvarchar(50) null --null means standalone / not part of a system
+
+ALTER TABLE [dbo].[applications]  WITH CHECK ADD  CONSTRAINT [FK_applications_application_group] FOREIGN KEY([application_group_id])
+REFERENCES [dbo].[application_group] ([id])
 
 GO
 

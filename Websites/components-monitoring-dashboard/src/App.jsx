@@ -6,6 +6,7 @@ import Login from './views/login';
 import Header from './components/header';
 import ProtectedRoute from './components/protected-route';
 import User from './views/user';
+import ApplicationGroup from './views/application-group';
 
 function App() {
   return (
@@ -26,6 +27,15 @@ function App() {
             }
           />
           
+          <Route
+            path="/ApplicationGroups"
+            element={
+              // <ProtectedRoute>
+                <ApplicationGroup />
+              // </ProtectedRoute>
+            }
+          />
+
           {/* New Route for Silenced/Exceptions */}
           <Route
             path="/Exceptions"

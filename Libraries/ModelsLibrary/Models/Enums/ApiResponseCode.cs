@@ -9,6 +9,7 @@ namespace ModelsLibrary.Models.Enums
 	{
 		Success = 200,
 		UserExists = 901,
+		ApplicationGroupExists = 902,
 		InternalServerError = 999,
 	}
 }

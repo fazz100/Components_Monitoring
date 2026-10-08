@@ -20,9 +20,9 @@ namespace ComponentsMonitoringAPI.BLL.Services
          _appDBRepo = new DAL.Repositories.ApplicationDatabaseRepository(); 
       }
 
-      public List<ApplicationModel> GetApplications(string type,string appName=null, bool includeExceptions = true) 
+      public List<ApplicationModel> GetApplications(string type,string appName=null, bool includeExceptions = true, bool includeInactiveGroups = false)
       {
-         var list = _repo.GetAll(type, appName, includeExceptions);
+         var list = _repo.GetAll(type, appName, includeExceptions, includeInactiveGroups);
 
          foreach (var l in list)
          {

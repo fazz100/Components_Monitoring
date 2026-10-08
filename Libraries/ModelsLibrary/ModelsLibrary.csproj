@@ -53,6 +53,7 @@
     <Compile Include="Models\API\ReponseCodeModel.cs" />
     <Compile Include="Models\ApplicationDatabaseModel.cs" />
     <Compile Include="Models\ApplicationExceptionsModel.cs" />
+    <Compile Include="Models\ApplicationGroupModel.cs" />
     <Compile Include="Models\ApplicationModel.cs" />
     <Compile Include="Models\CustomExceptions\InvalidWebsiteUrlException.cs" />
     <Compile Include="Models\Enums\ApiResponseCode.cs" />

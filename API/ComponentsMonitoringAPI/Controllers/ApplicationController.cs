@@ -20,7 +20,7 @@ namespace ComponentsMonitoringAPI.Controllers
 
       [HttpGet]
       [Route("api/applications/{type?}/{appName?}/{includeExceptions?}")]
-      public IHttpActionResult GetList(string type=null, string appName = null, bool includeExceptions = true) => TryCatchWrapper(() => _service.GetApplications(type, appName, includeExceptions));
+      public IHttpActionResult GetList(string type=null, string appName = null, bool includeExceptions = true, bool includeInactiveGroups = false) => TryCatchWrapper(() => _service.GetApplications(type, appName, includeExceptions, includeInactiveGroups));
 
 
       [HttpPost]
@@ -35,6 +35,7 @@ namespace ComponentsMonitoringAPI.Controllers
          // Cleanup
          if (model.Application_Type != "scheduled task") model.Is_Enabled = null;
          if (model.Application_Type != "windows service") model.Service_Status = null;
+         if (string.IsNullOrEmpty(model.Application_Group_Id)) model.Application_Group_Id = null;
 
          _service.Create(model);
          return true;
@@ -50,6 +51,7 @@ namespace ComponentsMonitoringAPI.Controllers
          // Cleanup
          if (model.Application_Type != "scheduled task") model.Is_Enabled = null;
          if (model.Application_Type != "windows service") model.Service_Status = null;
+         if (string.IsNullOrEmpty(model.Application_Group_Id)) model.Application_Group_Id = null;
 
          _service.Update(model);
          return true;
