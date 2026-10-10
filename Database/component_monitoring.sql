@@ -42,46 +42,39 @@ GO
 
 
 
-/****** Object:  Table [dbo].[user_session]    Script Date: 4/3/2026 4:10:48 PM ******/
-SET ANSI_NULLS ON
+/****** OAuth 2.0: refresh tokens (replaces [dbo].[user_session]) ******/
+CREATE TABLE [dbo].[refresh_tokens] (
+    [id] NVARCHAR(50) NOT NULL PRIMARY KEY, -- String GUID
+    [user_id] NVARCHAR(50) NOT NULL,        -- FK to [dbo].[user].[id]
+    [token_hash] NVARCHAR(256) NOT NULL UNIQUE,
+    [issued_at] DATETIME NOT NULL,
+    [expires_at] DATETIME NOT NULL,
+    [is_revoked] BIT NOT NULL DEFAULT 0,
+    CONSTRAINT [FK_refresh_tokens_user] FOREIGN KEY ([user_id]) REFERENCES [dbo].[user] ([id])
+);
 GO
 
-SET QUOTED_IDENTIFIER ON
+/****** OAuth 2.0: consumer applications allowed to request tokens ******/
+CREATE TABLE [dbo].[api_clients] (
+    [id] NVARCHAR(50) NOT NULL PRIMARY KEY, -- String GUID
+    [client_name] NVARCHAR(100) NOT NULL,    -- e.g., 'Components Monitoring Dashboard'
+    [client_id] NVARCHAR(100) NOT NULL UNIQUE,
+    [client_secret_hash] NVARCHAR(256) NULL,
+    [is_active] BIT NOT NULL DEFAULT 1,
+    [created_date] DATETIME NOT NULL DEFAULT GETUTCDATE()
+);
 GO
 
-CREATE TABLE [dbo].[user_session](
-	[id] [nvarchar](50) NOT NULL,
-	[user_id] [nvarchar](50) NOT NULL,
-	[token] [nvarchar](256) NOT NULL,
-	[issued_at] [datetime] NOT NULL,
-	[expires_at] [datetime] NOT NULL,
-	[is_revoked] [bit] NOT NULL,
-PRIMARY KEY CLUSTERED 
-(
-	[id] ASC
-)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY],
-UNIQUE NONCLUSTERED 
-(
-	[token] ASC
-)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY],
-UNIQUE NONCLUSTERED 
-(
-	[token] ASC
-)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY]
-) ON [PRIMARY]
-GO
-
-ALTER TABLE [dbo].[user_session] ADD  DEFAULT (getutcdate()) FOR [issued_at]
-GO
-
-ALTER TABLE [dbo].[user_session] ADD  DEFAULT ((0)) FOR [is_revoked]
-GO
-
-ALTER TABLE [dbo].[user_session]  WITH CHECK ADD  CONSTRAINT [FK_user_session_user] FOREIGN KEY([user_id])
-REFERENCES [dbo].[user] ([id])
-GO
-
-ALTER TABLE [dbo].[user_session] CHECK CONSTRAINT [FK_user_session_user]
+-- Insert first client entry for the React Dashboard
+INSERT INTO [dbo].[api_clients] ([id], [client_name], [client_id], [client_secret_hash], [is_active], [created_date])
+VALUES (
+    LOWER(NEWID()),
+    'Components Monitoring Dashboard',
+    'components_monitoring_react_app',
+    NULL, -- Public SPA client (no secret required)
+    1,
+    GETUTCDATE()
+);
 GO
 
 

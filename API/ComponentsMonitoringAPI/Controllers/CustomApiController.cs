@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Security.Claims;
 using System.Web.Http;
 
 namespace ComponentsMonitoringAPI.Controllers
@@ -21,29 +22,8 @@ namespace ComponentsMonitoringAPI.Controllers
 			_responseCode = new ResponseCodeService();
 		}
 
-		protected string CurrentUserId
-		{
-			get
-			{
-				if (Request.Properties.ContainsKey("CurrentUserId"))
-				{
-					return Request.Properties["CurrentUserId"] as string;
-				}
-				return null;
-			}
-		}
-
-		protected UserSessionModel CurrentSession
-		{
-			get
-			{
-				if (Request.Properties.ContainsKey("UserSession"))
-				{
-					return Request.Properties["UserSession"] as UserSessionModel;
-				}
-				return null;
-			}
-		}
+		// Set by the OWIN bearer middleware from the access token's NameIdentifier claim
+		protected string CurrentUserId => (User?.Identity as ClaimsIdentity)?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
 
 		protected IHttpActionResult TryCatchWrapper<T>(Func<T> action)

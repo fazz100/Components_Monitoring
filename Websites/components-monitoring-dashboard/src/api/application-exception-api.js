@@ -1,12 +1,9 @@
 import { getConfig } from '../config/config';
-import { getAuthToken, handleApiResponse } from '../helpers/auth-token-helper';
+import { authFetch, handleApiResponse } from '../helpers/auth-token-helper';
 
+// the bearer token is added by authFetch
 async function getHeaders() {
-    const config = await getConfig();
-    const token = getAuthToken();
     return {
-        'Authorization': `Bearer ${token}`,
-        'X-Api-Token': config.API_AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
     };
@@ -24,7 +21,7 @@ export async function getExceptions( appName = null) {
     const queryString = params.toString();
     const finalUrl = queryString ? `${baseUrl}?${queryString}` : baseUrl;
 
-    const response = await fetch(finalUrl, {
+    const response = await authFetch(finalUrl, {
         method: 'GET',
         headers: await getHeaders()
     });
@@ -33,7 +30,7 @@ export async function getExceptions( appName = null) {
 
 export async function createException(model) {
     const config = await getConfig();
-    const response = await fetch(`${config.API_BASE_URL}/api/exceptions/create`, {
+    const response = await authFetch(`${config.API_BASE_URL}/api/exceptions/create`, {
         method: 'POST',
         headers: await getHeaders(),
         body: JSON.stringify(model)
@@ -43,7 +40,7 @@ export async function createException(model) {
 
 export async function deleteException(id) {
     const config = await getConfig();
-    const response = await fetch(`${config.API_BASE_URL}/api/exceptions/delete/${id}`, {
+    const response = await authFetch(`${config.API_BASE_URL}/api/exceptions/delete/${id}`, {
         method: 'DELETE',
         headers: await getHeaders()
     });

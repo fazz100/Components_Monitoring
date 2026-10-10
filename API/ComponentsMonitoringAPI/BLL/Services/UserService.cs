@@ -22,12 +22,12 @@ namespace ComponentsMonitoringAPI.BLL.Services
 	public class UserService : IUserService
 	{
 		IUserRepository _userRepository;
-		IUserSessionRepository _userSessionRepository;
+		IRefreshTokenRepository _refreshTokenRepository;
 		private static LogWriter LOGGER = new LogWriter();
 		public UserService()
 		{
 			_userRepository = new UserRepository();
-			_userSessionRepository = new UserSessionRepository();
+			_refreshTokenRepository = new RefreshTokenRepository();
 		}
 
 		public void CreateUser(UserModel model)
@@ -64,89 +64,15 @@ namespace ComponentsMonitoringAPI.BLL.Services
 			}
 		}
 
-		public LoginResponseModel Login(UserModel model)
+		public bool Logout(string refreshToken, string userId)
 		{
-			try
+			// only the owner of the refresh token can revoke it
+			if (!string.IsNullOrEmpty(refreshToken) && !string.IsNullOrEmpty(userId))
 			{
-				var username = model.Username;
-				var password = model.PasswordString;
-
-				//get user account by username
-				UserModel savedUserModel = _userRepository.GetByUsername(username);
-
-				if (savedUserModel == null || savedUserModel.IsDeleted)
-				{
-					return new LoginResponseModel { IsAuthenticated = false, Message = "Invalid username or password." };
-				}
-
-				var savedPasswordHash = Encoding.UTF8.GetString(savedUserModel.Password);
-				var isVerified = VerifyPassword(password, savedPasswordHash);//true;
-
-				if (!isVerified)
-				{
-					return new LoginResponseModel { IsAuthenticated = false, Message = "Invalid username or password." };
-				}
-
-				var expiryInSeconds = int.Parse(WebConfigurationManager.AppSettings["SessionExpiryInSeconds"]);
-				//generate secure token
-				var token = Guid.NewGuid().ToString("N"); // 32-char hex string
-				var issuedAt = DateTime.UtcNow;
-				var expiresAt = issuedAt.AddSeconds(expiryInSeconds);
-
-				//save session to DB
-				var session = new UserSessionModel
-				{
-					Id = Guid.NewGuid().ToString(),
-					User_Id = savedUserModel.Id,
-					Token = token,
-					Issued_At = issuedAt,
-					Expires_At = expiresAt,
-					Is_Revoked = false
-				};
-
-				_userSessionRepository.Insert(session);
-
-
-				return new LoginResponseModel
-				{
-					IsAuthenticated = true,
-					Token = token,
-					ExpiresAt = expiresAt,
-					UserId = savedUserModel.Id,
-					Username = savedUserModel.Username,
-					FullName = $"{savedUserModel.FirstName} {savedUserModel.LastName}",
-					Message = "Login successful."
-				};
-
-
-
+				_refreshTokenRepository.RevokeByHash(HashHelper.ComputeSha512Hash(refreshToken), userId);
 			}
-			catch (Exception ex)
-			{
-				LOGGER.Error(ex);
-				throw;
-			}
-		}
 
-		public bool Logout(string token)
-		{
-			try
-			{
-
-				var userSession = _userSessionRepository.GetByToken(token);
-				if (userSession != null)
-				{
-					userSession.Is_Revoked = true;
-
-					_userSessionRepository.LogoutSession(userSession);
-				}
-
-				return true;
-			}
-			catch (Exception)
-			{
-				throw;
-			}
+			return true;
 		}
 
 		public List<UserModel> GetUsers(string searchTerm = null)
@@ -210,9 +136,7 @@ namespace ComponentsMonitoringAPI.BLL.Services
 		private byte[] GetPasswordByte(string password)
 		{
 			var encryptedPepper = WebConfigurationManager.AppSettings["encrypted_pepper"];
-			LOGGER.Info("encryptedPepper " + encryptedPepper);
 			var pepper = DpapiHelper.Decrypt(encryptedPepper);
-			LOGGER.Info("pepper " + encryptedPepper);
 
 			// 1. Generate a random salt (Argon2 needs this, but you don't encrypt it)
 			byte[] salt = new byte[16];
@@ -235,7 +159,7 @@ namespace ComponentsMonitoringAPI.BLL.Services
 
 			return passwordByteArray;
 		}
-		private bool VerifyPassword(string inputPassword, string storedRecord)
+		public bool VerifyPassword(string inputPassword, string storedRecord)
 		{
 			var encryptedPepper = WebConfigurationManager.AppSettings["encrypted_pepper"];
 			var pepper = DpapiHelper.Decrypt(encryptedPepper);

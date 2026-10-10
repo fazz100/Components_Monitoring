@@ -3,12 +3,11 @@ using System.Web.Http;
 using ModelsLibrary.Models;
 using ComponentsMonitoringAPI.BLL.Interfaces;
 using ComponentsMonitoringAPI.BLL.Services;
-using ComponentsMonitoringAPI.Attributes;
 
 namespace ComponentsMonitoringAPI.Controllers
 {
    [RoutePrefix("api/application-databases")]
-   [TokenAuthorize]
+   [Authorize]
    public class ApplicationDatabaseController : CustomApiController
    {
       private readonly IApplicationDatabaseService _service;

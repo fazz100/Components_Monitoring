@@ -1,27 +1,18 @@
 import { getConfig } from '../config/config'
 
 
-import { getAuthToken } from '../helpers/auth-token-helper'
+import { getAuthToken, getRefreshToken, requestToken, authFetch } from '../helpers/auth-token-helper'
 import { handleApiResponse } from '../helpers/auth-token-helper'
 
+// OAuth 2.0 password grant against /token
+// returns { ok, data } where data is the token response or { error, error_description }
 export async function loginUser({ Username, PasswordString }) {
   try {
-    const config = await getConfig(); // load config at runtime
-    const API_BASE_URL = config.API_BASE_URL;
-    const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
-
-    const response = await fetch(`${API_BASE_URL}/api/user/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Api-Token': API_AUTH_TOKEN
-        
-      },
-      body: JSON.stringify({ Username, PasswordString }),
+    return await requestToken({
+      grant_type: 'password',
+      username: Username,
+      password: PasswordString,
     });
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Login API error:", error);
     throw error;
@@ -32,28 +23,26 @@ export async function loginUser({ Username, PasswordString }) {
 export async function logoutUser() {
   const config = await getConfig(); // load config at runtime
   const API_BASE_URL = config.API_BASE_URL;
-  const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
 
   const token = getAuthToken();
 
-  if (!token) return false; 
+  if (!token) return false;
 
   try {
 
-    
-    const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
+    // revokes the refresh token; body is a function so a silent refresh during this call sends the rotated token
+    const response = await authFetch(`${API_BASE_URL}/api/auth/logout`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
-        'X-Api-Token': API_AUTH_TOKEN
-      }
+      },
+      body: () => JSON.stringify({ RefreshToken: getRefreshToken() }),
     });
 
     const data = await response.json();
     console.log('Logout response:', data);
 
-    return data; 
+    return data;
   } catch (error) {
     console.error('Logout API error:', error);
     // still clear local storage even if API fails
@@ -64,17 +53,12 @@ export async function logoutUser() {
 export async function createUser(userData) {
   const config = await getConfig(); // load config at runtime
   const API_BASE_URL = config.API_BASE_URL;
-  const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
-
-  const token = getAuthToken();
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/user/create`, {
+    const response = await authFetch(`${API_BASE_URL}/api/user/create`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Api-Token': API_AUTH_TOKEN,
-        'Authorization': `Bearer ${token}`, // token needed for auth check
       },
       body: JSON.stringify(userData),
     });
@@ -92,25 +76,20 @@ export async function createUser(userData) {
 
 export async function getUsers(searchTerm = null) {
   const config = await getConfig(); // load config at runtime
-  const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
-
-  const token = getAuthToken();
 
   const baseUrl = `${config.API_BASE_URL}/api/user/get-user/`;
 
   const params = new URLSearchParams();
     if (searchTerm) params.append('searchTerm', searchTerm);
-    
+
   const queryString = params.toString();
   const finalUrl = queryString ? `${baseUrl}?${queryString}` : baseUrl;
 
   try {
-    const response = await fetch(finalUrl, {
+    const response = await authFetch(finalUrl, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        'X-Api-Token': API_AUTH_TOKEN,
-        'Authorization': `Bearer ${token}`,
       },
     });
 
@@ -127,17 +106,12 @@ export async function getUsers(searchTerm = null) {
 export async function updateUserDetails(userData) {
   const config = await getConfig(); // load config at runtime
   const API_BASE_URL = config.API_BASE_URL;
-  const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
-
-  const token = getAuthToken();
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/user/update`, {
+    const response = await authFetch(`${API_BASE_URL}/api/user/update`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Api-Token': API_AUTH_TOKEN,
-        'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify(userData),
     });
@@ -153,9 +127,6 @@ export async function updateUserDetails(userData) {
 export async function updateUserStatus(id, isDeleted, username) {
   const config = await getConfig(); // load config at runtime
   const API_BASE_URL = config.API_BASE_URL;
-  const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
-  
-  const token = getAuthToken();
 
   try {
     const payload = {
@@ -166,12 +137,10 @@ export async function updateUserStatus(id, isDeleted, username) {
       UpdatedBy: 1,
     };
 
-    const response = await fetch(`${API_BASE_URL}/api/user/update`, {
+    const response = await authFetch(`${API_BASE_URL}/api/user/update`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Api-Token': API_AUTH_TOKEN,
-        'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify(payload),
     });
@@ -203,16 +172,12 @@ export async function changeUserPassword(id, newPassword) {
   try {
     const config = await getConfig(); // load config at runtime
     const API_BASE_URL = config.API_BASE_URL;
-    const API_AUTH_TOKEN = config.API_AUTH_TOKEN;
 
-    const token = getAuthToken();
-    const response = await fetch(`${API_BASE_URL}/api/user/change-password`, {
+    const response = await authFetch(`${API_BASE_URL}/api/user/change-password`, {
       method: 'POST',
-      headers: new Headers({
-        'Authorization': `Bearer ${token}`,
-        'X-Api-Token': API_AUTH_TOKEN,
+      headers: {
         'Content-Type': 'application/json',
-      }),
+      },
       body: JSON.stringify({ Id: id, PasswordString: newPassword }),
       credentials: 'include',
     });

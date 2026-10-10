@@ -1,5 +1,4 @@
-﻿using ComponentsMonitoringAPI.Attributes;
-using ComponentsMonitoringAPI.BLL.Interfaces;
+﻿using ComponentsMonitoringAPI.BLL.Interfaces;
 using ComponentsMonitoringAPI.BLL.Services;
 using ModelsLibrary.Models;
 using ModelsLibrary.Models.API;
@@ -12,6 +11,7 @@ using System.Web.Http;
 
 namespace ComponentsMonitoringAPI.Controllers
 {
+	[Authorize]
 	public class UserController : CustomApiController
 	{
 		IUserService _userService;
@@ -37,40 +37,23 @@ namespace ComponentsMonitoringAPI.Controllers
 			});
 		}
 
-		[HttpPost]
-		[Route("api/user/login")]
-		public IHttpActionResult Login([FromBody] UserModel model)
-		{
-
-			return TryCatchWrapper<LoginResponseModel>(() =>
-			{
-
-				var response = _userService.Login(model);
-				return response;
-			});
-		}
+		// Login is handled by the OAuth /token endpoint (see Providers/ApplicationOAuthProvider.cs)
 
 		[HttpPost]
 		[Route("api/auth/logout")]
-		[TokenAuthorize]
-		public IHttpActionResult Logout()
+		public IHttpActionResult Logout([FromBody] LogoutRequestModel model)
 		{
 
 			return TryCatchWrapper<bool>(() =>
 			{
-
-				var token = Request.Headers.Authorization?.Parameter;
-
-				var response = _userService.Logout(token);
-				
-				return response;
+				// revokes the refresh token; the short-lived access token simply expires
+				return _userService.Logout(model?.RefreshToken, CurrentUserId);
 			});
-			
+
 		}
 
 		[HttpGet]
 		[Route("api/user/get-user/{searchTerm?}")]
-		[TokenAuthorize]
 		public IHttpActionResult GetUser(string searchTerm = null)
 		{
 
@@ -83,7 +66,6 @@ namespace ComponentsMonitoringAPI.Controllers
 
 		[HttpPost]
 		[Route("api/user/update")]
-		[TokenAuthorize]
 		public IHttpActionResult UpdateUser([FromBody] UserModel model)
 		{
 

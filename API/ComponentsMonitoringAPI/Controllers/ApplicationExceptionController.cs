@@ -1,5 +1,4 @@
-﻿using ComponentsMonitoringAPI.Attributes;
-using ComponentsMonitoringAPI.BLL.Interfaces;
+﻿using ComponentsMonitoringAPI.BLL.Interfaces;
 using ComponentsMonitoringAPI.BLL.Services;
 using ModelsLibrary.Models;
 using System;
@@ -7,7 +6,7 @@ using System.Web.Http;
 
 namespace ComponentsMonitoringAPI.Controllers
 {
-   [TokenAuthorize]
+   [Authorize]
    public class ApplicationExceptionController : CustomApiController
    {
       private readonly IApplicationExceptionService _service;

@@ -1,5 +1,4 @@
-﻿using ComponentsMonitoringAPI.Attributes;
-using ComponentsMonitoringAPI.BLL.Interfaces;
+﻿using ComponentsMonitoringAPI.BLL.Interfaces;
 using ComponentsMonitoringAPI.BLL.Services;
 using ModelsLibrary.Models;
 using ModelsLibrary.Models.Enums;
@@ -12,7 +11,7 @@ using System.Web.Http;
 
 namespace ComponentsMonitoringAPI.Controllers
 {
-   [TokenAuthorize]
+   [Authorize]
    public class ApplicationController : CustomApiController
     {
       private readonly IApplicationService _service;

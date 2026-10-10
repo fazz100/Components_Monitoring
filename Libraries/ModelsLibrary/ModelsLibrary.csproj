@@ -49,8 +49,9 @@
     <Compile Include="Models\API\APIExceptionModel.cs" />
     <Compile Include="Models\API\APIResponseModel.cs" />
     <Compile Include="Models\API\ConfigValue.cs" />
-    <Compile Include="Models\API\LoginResponseModel.cs" />
+    <Compile Include="Models\API\LogoutRequestModel.cs" />
     <Compile Include="Models\API\ReponseCodeModel.cs" />
+    <Compile Include="Models\ApiClientModel.cs" />
     <Compile Include="Models\ApplicationDatabaseModel.cs" />
     <Compile Include="Models\ApplicationExceptionsModel.cs" />
     <Compile Include="Models\ApplicationModel.cs" />
@@ -59,8 +60,8 @@
     <Compile Include="Models\Enums\WorkingStatus.cs" />
     <Compile Include="Models\ExecutionBatchModel.cs" />
     <Compile Include="Models\ExecutionLogModel.cs" />
+    <Compile Include="Models\RefreshTokenModel.cs" />
     <Compile Include="Models\UserModel.cs" />
-    <Compile Include="Models\UserSessionModel.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup />

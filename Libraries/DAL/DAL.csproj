@@ -55,23 +55,25 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Helpers\DapperHelper.cs" />
+    <Compile Include="Interfaces\IApiClientRepository.cs" />
     <Compile Include="Interfaces\IApplicationDatabaseRepository.cs" />
     <Compile Include="Interfaces\IApplicationExceptionRepository.cs" />
     <Compile Include="Interfaces\IApplicationRepository.cs" />
     <Compile Include="Interfaces\IExecutionBatchRepository.cs" />
     <Compile Include="Interfaces\IExecutionLogRepository.cs" />
+    <Compile Include="Interfaces\IRefreshTokenRepository.cs" />
     <Compile Include="Interfaces\IResponseCodeRepository.cs" />
     <Compile Include="Interfaces\IUserRepository.cs" />
-    <Compile Include="Interfaces\IUserSessionRepository.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Repositories\ApiClientRepository.cs" />
     <Compile Include="Repositories\ApplicationDatabaseRepository.cs" />
     <Compile Include="Repositories\ApplicationExceptionRepository.cs" />
     <Compile Include="Repositories\ApplicationRepository.cs" />
     <Compile Include="Repositories\ExecutionBatchRepository.cs" />
     <Compile Include="Repositories\ExecutionLogRepository.cs" />
+    <Compile Include="Repositories\RefreshTokenRepository.cs" />
     <Compile Include="Repositories\ResponseCodeRepository.cs" />
     <Compile Include="Repositories\UserRepository.cs" />
-    <Compile Include="Repositories\UserSessionRepository.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
