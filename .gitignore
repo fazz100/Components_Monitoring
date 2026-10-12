@@ -1,5 +1,6 @@
 # Visual Studio & User Settings
 .vs/
+.vscode/
 **/[Vv]s/
 *.user
 *.userosscache
