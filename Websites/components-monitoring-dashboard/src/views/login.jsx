@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { loginUser } from '../api/user-api';
+import { saveTokens } from '../helpers/auth-token-helper';
 import { useNavigate } from 'react-router-dom';
 
 function Login() {
@@ -17,20 +18,18 @@ function Login() {
     setSuccess(false);
 
     try {
-      const response = await loginUser({ Username, PasswordString });
-      
-      // Checking for response.Data and IsAuthenticated based on your API structure
-      if (response && response.Data && response.Data.IsAuthenticated) {
-        // Save token and related info in localStorage
-        localStorage.setItem('AuthToken', response.Data.Token);
-        localStorage.setItem('TokenExpiry', response.Data.ExpiresAt);
-        localStorage.setItem('Username', response.Data.Username);
-        localStorage.setItem('UserId', response.Data.UserId);
+      const { ok, data } = await loginUser({ Username, PasswordString });
 
-        localStorage.setItem('token', response.Data.Token);
-        localStorage.setItem('userId', response.Data.UserId);
-        localStorage.setItem('username', response.Data.Username);
-        localStorage.setItem('fullName', response.Data.FullName); // This is [First Name] [Last Name]
+      // OAuth 2.0 /token response: access_token, refresh_token, expires_in, userName, userId, fullName
+      if (ok && data.access_token) {
+        // Save tokens (AuthToken, token, RefreshToken, TokenExpiry) and related info in localStorage
+        saveTokens(data);
+        localStorage.setItem('Username', data.userName);
+        localStorage.setItem('UserId', data.userId);
+
+        localStorage.setItem('userId', data.userId);
+        localStorage.setItem('username', data.userName);
+        localStorage.setItem('fullName', data.fullName); // This is [First Name] [Last Name]
 
         setSuccess(true);
 
@@ -39,7 +38,7 @@ function Login() {
         // Delay redirect slightly for user feedback
         setTimeout(() => navigate('/Applications'), 2000);
       } else {
-        setError(response.message || 'Invalid username or password.');
+        setError(data.error_description || 'Invalid username or password.');
       }
     } catch (err) {
       console.error(err);

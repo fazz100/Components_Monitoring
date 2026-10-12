@@ -94,16 +94,17 @@ cd Websites/components-monitoring-dashboard; npm install; npm run dev   # also: 
 
 ```
 API/ComponentsMonitoringAPI/
-├── App_Start/          WebApiConfig (CORS, message handlers, attribute routes), FilterConfig, RouteConfig, BundleConfig
+├── App_Start/          WebApiConfig (attribute routes only), FilterConfig, RouteConfig, BundleConfig
 ├── Areas/HelpPage/     Auto-generated Web API help page. Do not modify.
-├── Attributes/         Action filters / authorization attributes (TokenAuthorizeAttribute)
 ├── BLL/
 │   ├── Interfaces/     I{Name}Service.cs
 │   └── Services/       {Name}Service.cs
 ├── Controllers/        {Entity}Controller.cs : CustomApiController
-├── Helpers/            Host-specific static helpers and handlers (DpapiHelper, TokenStore, TokenValidationHandler)
+├── Helpers/            Host-specific static helpers (DpapiHelper)
+├── Providers/          OWIN OAuth providers (ApplicationOAuthProvider, ApplicationRefreshTokenProvider)
 ├── Content/ Scripts/ Views/   MVC template leftovers. Do not extend.
 ├── Global.asax(.cs)
+├── Startup.cs          OWIN pipeline: CORS -> OAuth -> Web API
 └── Web.config          appSettings + connectionStrings
 ```
 
@@ -123,7 +124,7 @@ Libraries/ModelsLibrary/
 ├── Helpers/                    Static utility classes shared across hosts ({Purpose}Helper.cs)
 └── Models/
     ├── {Entity}Model.cs        DB-mapped entity/DTO (one per table)
-    ├── API/                    API-only shapes: APIResponseModel<T>, APIExceptionModel, LoginResponseModel, ReponseCodeModel
+    ├── API/                    API-only shapes: APIResponseModel<T>, APIExceptionModel, LogoutRequestModel, ReponseCodeModel
     ├── CustomExceptions/       {Name}Exception : Exception
     └── Enums/                  Enums (ApiResponseCode, WorkingStatus)
 ```
@@ -162,8 +163,8 @@ Websites/components-monitoring-dashboard/
 |---|---|---|
 | API endpoint | `API/ComponentsMonitoringAPI/Controllers/{Entity}Controller.cs` | `ComponentsMonitoringAPI.Controllers` |
 | Business service + its interface | `…API/BLL/Services/{Name}Service.cs` + `…API/BLL/Interfaces/I{Name}Service.cs` | `ComponentsMonitoringAPI.BLL.Services` / `.BLL.Interfaces` |
-| Auth/filter attribute | `…API/Attributes/` | `ComponentsMonitoringAPI.Attributes` |
-| Message handler or API-only helper | `…API/Helpers/` | `ComponentsMonitoringAPI.Helpers` |
+| OAuth provider / OWIN middleware config | `…API/Providers/` (pipeline itself only in `…API/Startup.cs`) | `ComponentsMonitoringAPI.Providers` |
+| API-only helper | `…API/Helpers/` | `ComponentsMonitoringAPI.Helpers` |
 | Repository + interface | `Libraries/DAL/Repositories/{Entity}Repository.cs` + `Libraries/DAL/Interfaces/I{Entity}Repository.cs` | `DAL.Repositories` / `DAL.Interfaces` |
 | DB entity / request-response model | `Libraries/ModelsLibrary/Models/{Entity}Model.cs` | `ModelsLibrary.Models` |
 | API envelope / API-only DTO | `Libraries/ModelsLibrary/Models/API/` | `ModelsLibrary.Models.API` |
@@ -214,14 +215,14 @@ public class ApplicationExceptionService : IApplicationExceptionService
 
 ### 4.3 Models / DTO pattern
 
-- **One model class per table, reused as entity, request DTO, and response DTO.** No separate Request/Response DTOs, no mapping library, no mapping methods. The only API-specific shapes are in `Models/API/` (`APIResponseModel<T>`, `LoginResponseModel`, …).
+- **One model class per table, reused as entity, request DTO, and response DTO.** No separate Request/Response DTOs, no mapping library, no mapping methods. The only API-specific shapes are in `Models/API/` (`APIResponseModel<T>`, `LogoutRequestModel`, …).
 - Model classes are plain `{ get; set; }` auto-property bags with **no logic and no data annotations**.
 - **Property naming is load-bearing.** DB columns are `snake_case`. Dapper maps columns to properties **case-insensitively but not underscore-insensitively**, so properties are **`Pascal_Snake_Case` matching the column**: `application_name` → `Application_Name`, `ip_address` → `IP_Address`, `created_date` → `Created_Date`. Single-word columns are plain PascalCase (`Id`, `Description`, `Token`).
 - The same property names go out in JSON (Newtonsoft, no contract resolver), so the React app reads `app.Application_Name` and `res.Data`. **Renaming a model property is a breaking API change.**
 - `UserModel` also has PascalCase alias properties (`FirstName` ⇄ `First_Name`, etc.) that wrap the snake-named property. Use this pattern only when an existing PascalCase name must keep working.
 - Non-persisted helper properties live on the model (e.g. `UserModel.PasswordString` for incoming plaintext, `ApplicationModel.Databases` for child rows filled in by the service).
 - Nullability: use `bool?`, `int?`, `DateTime?` for nullable DB columns. Reference types are plain (no NRT).
-- **IDs** are `string` GUIDs from `Guid.NewGuid().ToString()` (`nvarchar(50)` PKs). Session tokens use `Guid.NewGuid().ToString("N")`.
+- **IDs** are `string` GUIDs from `Guid.NewGuid().ToString()` (`nvarchar(50)` PKs). Raw refresh tokens use `Guid.NewGuid().ToString("N")` and are only ever stored as a SHA-512 hash.
 - **Timestamps** are always UTC: `DateTime.UtcNow`. Convert for display only, via `ModelsLibrary.Helpers.DateTimeHelper` (Eastern time).
 - **Audit columns** on tables: `created_date`, `created_by`, `updated_date`, `updated_by`. Controllers set them from `CurrentUserId`.
 - **Soft delete** applies to `applications` and `user` (`is_deleted` bit), and list queries filter `is_deleted=0`. Child and auxiliary tables (`application_databases`, `application_exceptions`) are hard-deleted.
@@ -238,7 +239,7 @@ public class ApplicationExceptionService : IApplicationExceptionService
   - Explicit column lists. Avoid `SELECT *` in new code.
   - Always parameterized: `@param` bound to an anonymous object `new { id = id }` or to the model itself (Dapper matches `@Application_Name` → property). **Never concatenate user input into SQL.**
   - Optional filters use the null-guard idiom: `(@appName is null or a.application_name like @appName + '%')`.
-- Repository method names: `Get(id)`, `GetAll(filters…)`, `GetBy{Field}(value)`, `Insert(model)`, `Update(model)`, `Delete(id[, updatedBy])`, plus domain verbs where needed (`LogoutSession`, `ExtendSession`, `TestDatabaseConnection`). Return `void` for writes, the model / `List<T>` / `null` for reads.
+- Repository method names: `Get(id)`, `GetAll(filters…)`, `GetBy{Field}(value)`, `Insert(model)`, `Update(model)`, `Delete(id[, updatedBy])`, plus domain verbs where needed (`Revoke`, `RevokeByHash`, `GetActiveByHash`, `TestDatabaseConnection`). Return `void` for writes (or `bool` when the caller must know a conditional update hit a row, e.g. `RefreshTokenRepository.Revoke`), the model / `List<T>` / `null` for reads. `DapperHelper.Execute` returns the affected row count.
 - No Unit of Work and no explicit transactions. Each call opens its own connection. Multi-row operations (e.g. `ApplicationService.Create` inserting child databases) loop over repository calls.
 - **Do not add EF / EF Core.** For new repositories use `DapperHelper<T>`, not the raw `SqlCommand`/`SqlDataReader` style in `ResponseCodeRepository`.
 
@@ -269,12 +270,28 @@ public IHttpActionResult Get(string id) => TryCatchWrapper(() => _service.GetByI
   - `POST api/{resource}/{action-name}` for RPC-style actions (e.g. `test-connection`)
   - Reference controller: `ApplicationGroupController`.
 - Mark each action with an explicit `[HttpGet]` or `[HttpPost]`. Bind complex bodies with `[FromBody]` or a model parameter. Front-end `src/api/*` functions use `method: 'POST'` for all writes.
-- **Auth has two layers:**
-  1. `TokenValidationHandler` (a global `DelegatingHandler`) requires header `X-Api-Token` to be in `TokenStore.ValidTokens`, on every request including login. It also answers CORS preflight `OPTIONS`.
-  2. `[TokenAuthorize]` (at class level, or per action on `UserController`) validates `Authorization: Bearer {session token}` against `user_session`, uses a sliding expiry (`SessionExpiryInSeconds`), and puts `CurrentUserId` and `UserSession` into `Request.Properties`.
-  - Read the caller with `CurrentUserId` / `CurrentSession` from `CustomApiController`. Never parse headers in actions (except logout).
-  - New controllers get `[TokenAuthorize]` at class level unless the endpoint is explicitly public.
-- CORS: a single allowed origin from appSetting `reactAppUrl`, configured in `WebApiConfig`. Allowed custom headers must be updated in **both** `WebApiConfig` and `TokenValidationHandler`.
+- **Auth is OAuth 2.0 via OWIN** (Katana 4.2.2, copied from the tested sample `MyOAuthWebApi`). Pipeline order in `Startup.cs` is fixed: **CORS → OAuth → `app.UseWebApi(GlobalConfiguration.Configuration)`**.
+  - **`POST /token`** (OWIN, not a controller) takes an `x-www-form-urlencoded` body:
+    - `grant_type=password` with `username`, `password`, `client_id`
+    - `grant_type=refresh_token` with `refresh_token`, `client_id`
+
+    It returns `access_token`, `refresh_token`, `expires_in`, `userName`, `userId`, `fullName`. Errors are OAuth-standard `{ error, error_description }` with HTTP 400, **not** the `APIResponseModel` envelope.
+  - **Access tokens** are OWIN default bearer tokens (opaque, protected by the machine key; **not JWT**). Every server in a farm needs the same `<machineKey>`. Lifetime comes from `access_token_expiry_in_minutes`, and they cannot be revoked.
+  - **Clients:**
+    - `ApplicationOAuthProvider.ValidateClientAuthentication` requires a `client_id` that is in `[api_clients]` with `is_active = 1`.
+    - A client with a `client_secret_hash` must also send a secret whose SHA-512 hash matches. The SPA (`components_monitoring_react_app`) is a public client with no secret.
+    - To add a consumer, insert an `[api_clients]` row.
+  - **Users:**
+    - `GrantResourceOwnerCredentials` checks the user via `UserRepository.GetByUsername` and `UserService.VerifyPassword` (Argon2id + pepper, §4.8). Deleted users are rejected.
+    - The ticket is built by `ApplicationOAuthProvider.CreateTicket`, the single place claims are defined: `NameIdentifier` = user id, `Name` = username, `FullName`.
+  - **Refresh tokens** (`ApplicationRefreshTokenProvider`) are **single-use**, stored in `[refresh_tokens]` as a SHA-512 `token_hash` with a lifetime from `refresh_token_expiry_in_days`.
+    - On use, the row is revoked with a conditional update (`is_revoked = 0`), so a concurrent reuse fails.
+    - The ticket is then rebuilt from the current `[user]` row.
+    - Logout (`POST api/auth/logout` with `{ RefreshToken }`) revokes it.
+  - Protect controllers with **`[Authorize]`** (`System.Web.Http`) at class level. Do not add custom auth attributes or message handlers.
+  - Read the caller with `CurrentUserId` (from `CustomApiController`). It reads `ClaimTypes.NameIdentifier` from `User.Identity`. Never parse auth headers in actions.
+- **CORS** is the OWIN CORS middleware in `Startup.cs`. Its policy allows **only** the `reactAppUrl` appSetting origin, with any header and any method. Do **not** also enable Web API CORS (`config.EnableCors`) or add CORS headers by hand, because duplicate `Access-Control-Allow-Origin` headers make browsers reject the response.
+- `Web.config` `<system.webServer>` must keep `runAllManagedModulesForAllRequests="true"` and the WebDAV/OPTIONS handler removals, so every request, including preflight `OPTIONS`, reaches OWIN.
 
 ### 4.6 Error handling
 
@@ -289,7 +306,7 @@ throw apiException;
   `TryCatchWrapper` logs it at **Info**, looks up `Code`/`Message` from the `response_code` table, and returns HTTP 500 with that envelope.
   **When adding a code:** add the enum member (codes 9xx) **and** an `INSERT INTO response_code` row in `Database/component_monitoring.sql`.
 - **Unexpected errors:** let them bubble up. `TryCatchWrapper` logs at **Error** and returns `{Code:500, Message:"Error", Details:<exception>}`.
-- Login failure is **not** an exception. It returns `LoginResponseModel { IsAuthenticated = false, Message = … }`.
+- Login failure is **not** an exception. The OAuth provider calls `context.SetError("invalid_grant", …)`, and `/token` returns HTTP 400 `{ error, error_description }`. Provider code catches exceptions, logs them, and returns `server_error` without the exception text.
 - Exes: `Program.Main` has a top-level `try/catch` that logs and writes to the console. Each `Process*` service method has its own try/catch so one failing component does not stop the others. It logs and emails the failure (`NotifyFailure`) and continues.
 - Domain-specific exceptions go in `Models/CustomExceptions` and follow the three-constructor `[Serializable]` pattern of `InvalidWebsiteUrlException`.
 - Existing code often wraps methods in `try { … } catch (Exception) { throw; }`. This is harmless but adds nothing. **New code should omit it** unless the catch logs or translates. **Never write `throw ex;`**, because it loses the stack trace. Use `throw;`.
@@ -312,7 +329,11 @@ private static LogWriter LOGGER = new LogWriter();
   - `WebConfigurationManager.AppSettings["key"]` in the API.
   - `ConfigurationManager.AppSettings["key"]` in exes and libraries.
 - Parse settings with a default fallback where sensible: `!string.IsNullOrEmpty(x) ? int.Parse(x) : 7`.
-- appSettings keys are **`snake_case`** (`smtp_host`, `days_silence_duration`, `encrypted_pepper`). The API's older keys `SessionExpiryInSeconds` and `reactAppUrl` are exceptions. Use snake_case for new keys.
+- appSettings keys are **`snake_case`** (`smtp_host`, `days_silence_duration`, `encrypted_pepper`). The API's older key `reactAppUrl` and the framework key `owin:AutomaticAppStartup` are exceptions. Use snake_case for new keys.
+- API OAuth keys:
+  - `access_token_expiry_in_minutes` (15)
+  - `refresh_token_expiry_in_days` (7)
+  - `oauth_allow_insecure_http`: `true` only in the dev `Web.config`. `Web.Release.config` transforms it to `false`, so `/token` requires HTTPS in release builds.
 - Secrets at rest use **DPAPI** (`DpapiHelper.Encrypt/Decrypt`, `DataProtectionScope.LocalMachine`). The encrypted pepper is produced by `DPAPIEncryptor` and stored in `encrypted_pepper`.
 - **Passwords:** Argon2id (salt 16 bytes, `DegreeOfParallelism = 8`, `Iterations = 4`, `MemorySize = 65536`, 32-byte hash) over `password + pepper`. Stored as UTF-8 bytes of `"{saltB64}:{hashB64}"` in `user.password varbinary(max)`. Any new auth code must use exactly these parameters, or existing hashes will stop verifying.
 
@@ -329,12 +350,15 @@ private static LogWriter LOGGER = new LogWriter();
 
 - **Function components** with hooks only. PascalCase component names, **kebab-case file names** (`application-list.jsx`), `export default` at the bottom.
 - All HTTP goes through `src/api/*-api.js`:
-  - `async` functions using `fetch`.
+  - `async` functions using **`authFetch`** from `helpers/auth-token-helper.js`, never bare `fetch`, for API calls.
   - URL built from `(await getConfig()).API_BASE_URL`.
-  - Headers include both `X-Api-Token` (from config) and `Authorization: Bearer ${getAuthToken()}`.
+  - `authFetch` adds `Authorization: Bearer {access_token}`. On a 401 it silently refreshes once and retries.
+  - The refresh goes through `refreshAccessToken()`, which shares one in-flight request so parallel 401s don't spend the single-use refresh token twice.
+  - Pass `body` as a function when it must be re-read on retry (e.g. logout sends the current refresh token).
   - Results pass through `handleApiResponse()`, which throws on non-OK and redirects to `/` on 401.
+- Token requests go through `requestToken(params)`, which sends a form-encoded `POST {API_BASE_URL without trailing slash}/token` and adds `client_id` from config `OAUTH_CLIENT_ID`. OWIN won't match `//token`.
 - Callers unwrap the envelope with `res.Data` and use the server's `Pascal_Snake` property names unchanged.
-- Auth state is in `localStorage` (`AuthToken`, `username`, `fullName`).
+- Auth state is in `localStorage`: `AuthToken`/`token` (access token), `RefreshToken`, `TokenExpiry`, `username`, `userId`, `fullName`. `saveTokens()` writes the token keys.
 - Runtime config comes from `public/config.json`. Do not use `import.meta.env` for deploy-time values.
 - Styling is plain CSS in `App.css`/`index.css`. Icons are FontAwesome. No UI framework or CSS-in-JS.
 
@@ -348,11 +372,11 @@ private static LogWriter LOGGER = new LogWriter();
 |---|---|---|
 | Interface | `I` + PascalCase, same name as its implementation | `IApplicationService` |
 | Service | `{Domain}Service` | `ApplicationExceptionService` |
-| Repository | `{Entity}Repository` | `UserSessionRepository` |
+| Repository | `{Entity}Repository` | `RefreshTokenRepository` |
 | Controller | `{Entity}Controller` (singular) | `ApplicationDatabaseController` |
 | Model | `{Entity}Model` (singular, except the existing `ApplicationExceptionsModel`) | `ApplicationDatabaseModel` |
 | Helper | `{Purpose}Helper`, usually `static class` | `DpapiHelper`, `HashHelper` |
-| Attribute | `{Name}Attribute` | `TokenAuthorizeAttribute` |
+| OAuth provider | `Application{Purpose}Provider` | `ApplicationRefreshTokenProvider` |
 | Exception | `{Name}Exception` | `InvalidWebsiteUrlException` |
 | Enum / members | PascalCase / PascalCase | `WorkingStatus.KnownIssue` |
 | Methods | PascalCase, verb-first (`Get…`, `Process…`, `Check…`, `Notify…`) | `ProcessScheduledTasks` |
@@ -372,7 +396,7 @@ private static LogWriter LOGGER = new LogWriter();
 
 - Expression-bodied members for one-line methods and properties (`public void Update(ApplicationModel m) => _repo.Update(m);`).
 - String interpolation `$"…"`, null-conditional `?.`, `??`, `nameof`, `var` for obvious types.
-- Object initializers (`new LoginResponseModel { … }`), `using` statements with braces, `out var`, tuples / `Tuple<…>`.
+- Object initializers (`new RefreshTokenModel { … }`), `using` statements with braces, `out var`, tuples / `Tuple<…>`.
 - `default` literal.
 
 **Not available. Do not use:**
@@ -403,7 +427,7 @@ private static LogWriter LOGGER = new LogWriter();
 2. **Model:** add `Libraries/ModelsLibrary/Models/{Entity}Model.cs` with `Pascal_Snake` properties matching the columns. Add a `<Compile Include>` entry.
 3. **Repository:** add `DAL/Interfaces/I{Entity}Repository.cs` and `DAL/Repositories/{Entity}Repository.cs` using `DapperHelper<{Entity}Model>` and parameterized SQL. Add `<Compile Include>` entries.
 4. **Service:** add `API/.../BLL/Interfaces/I{Entity}Service.cs` and `BLL/Services/{Entity}Service.cs`. Construct repositories with `new` in the constructor. Throw `APIExceptionModel` for business-rule failures. Add `<Compile Include>` entries.
-5. **Controller:** add `Controllers/{Entity}Controller.cs : CustomApiController` with `[RoutePrefix("api/{kebab-resources}")]` and `[TokenAuthorize]`. Use GET for reads and POST for every write; never PUT or DELETE. Every action goes through `TryCatchWrapper`. Stamp `Id`/audit fields from `CurrentUserId` + `DateTime.UtcNow`. Add a `<Compile Include>` entry.
+5. **Controller:** add `Controllers/{Entity}Controller.cs : CustomApiController` with `[RoutePrefix("api/{kebab-resources}")]` and `[Authorize]`. Use GET for reads and POST for every write; never PUT or DELETE. Every action goes through `TryCatchWrapper`. Stamp `Id`/audit fields from `CurrentUserId` + `DateTime.UtcNow`. Add a `<Compile Include>` entry.
 6. **Response codes:** if there are new business errors, add an `ApiResponseCode` member and a `response_code` seed row.
 7. **Front end:** add `src/api/{resource}-api.js` (copy `application-api.js`'s `getHeaders`/`handleApiResponse` pattern), then a view in `src/views/` and a route in `App.jsx`.
 8. **Config:** add any new appSettings (snake_case) to every host config that needs them, and to `Deployment/` configs only when producing a deployment.
@@ -433,7 +457,8 @@ private static LogWriter LOGGER = new LogWriter();
 - **Exception (application exception):** a *silencing* record in `application_exceptions`. It suppresses alerts for an app until the ExceptionsUpdater removes it after `days_silence_duration` days. These are unrelated to .NET exceptions.
 - **Application group:** a named system that applications belong to (`application_group`, soft-deleted via `is_deleted`). Membership is `applications.application_group_id` (nullable FK, `NULL` = standalone). The Applications page sorts by group by default and hides apps whose group is deleted unless "Include Inactive Applications Group" is checked. Groups are managed on the Application Groups page (`views/application-group.jsx`).
 - **Application database:** a connection string associated with an app (`application_databases`) whose connectivity can be tested.
-- **Session:** row in `user_session`. The token is a 32-char hex GUID with sliding expiry.
+- **Refresh token:** row in `refresh_tokens` (SHA-512 `token_hash`, single-use, `is_revoked`). It replaced the old `user_session` table, which the migration script drops once you run its final step.
+- **API client:** row in `api_clients`. An application allowed to request tokens from `/token` (e.g. `components_monitoring_react_app`).
 
 ---
 
@@ -444,9 +469,9 @@ These exist today. Do not replicate them in new code. Fix them only when the tas
 - `DapperHelper` creates `SqlConnection`s without `using`/`Dispose`. Any new helper method must wrap the connection in `using (IDbConnection db = new SqlConnection(_connectionString)) { … }`.
 - `throw ex;` in `ResponseCodeService` and `ResponseCodeRepository` loses the stack trace.
 - `UserService.GetUsers` swallows exceptions and returns `null`.
-- `UserService.GetPasswordByte` logs the encrypted pepper.
-- Secrets are committed: the static `X-Api-Token` in `TokenStore` and `public/config.json`, the DPAPI entropy string, and SQL credentials in `App.config`.
-- `ProtectedRoute` is a no-op and its usages in `App.jsx` are commented out, so the front-end routes are unguarded. The API's `[TokenAuthorize]` still enforces auth.
+- Secrets are committed: the DPAPI entropy string and SQL credentials in `App.config`.
+- `ProtectedRoute` is a no-op and its usages in `App.jsx` are commented out, so the front-end routes are unguarded. The API's `[Authorize]` still enforces auth.
+- `[refresh_tokens]` has no `client_id` column, so a refresh token is not bound to the client that received it. Every refresh request is still checked against `[api_clients]`.
 - `ComponentsMonitoringAPI.csproj` and `ComponentsMonitoringExceptionsUpdater.csproj` reference `Dg3.CommonLibraries.LogWriter.dll` via a `bin\Debug` hint path of another project. New references to in-house DLLs should point at `/dependencies`.
 - `APIExceptionModel` business errors return HTTP 500 rather than a 4xx.
 - `ConfigValue` in `ModelsLibrary.Models.API` contains unrelated, unused keys (MSMQ/SFTP).

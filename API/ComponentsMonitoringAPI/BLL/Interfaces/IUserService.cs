@@ -11,8 +11,8 @@ namespace ComponentsMonitoringAPI.BLL.Interfaces
 	public interface IUserService
 	{
 		void CreateUser(UserModel model);
-		LoginResponseModel Login(UserModel model);
-		bool Logout(string token);
+		bool VerifyPassword(string inputPassword, string storedRecord);
+		bool Logout(string refreshToken, string userId);
 		List<UserModel> GetUsers(string searchTerm = null);
 
 		void UpdateUser(UserModel model);

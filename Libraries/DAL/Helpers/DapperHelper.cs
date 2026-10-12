@@ -19,8 +19,8 @@ namespace DAL.Helpers
          // Read from appsettings.json
          _connectionString = ConfigurationManager.ConnectionStrings["database"].ConnectionString;
       }
-      //for insert
-      public void Execute(string sql, T t)
+      //for insert, returns the number of affected rows
+      public int Execute(string sql, T t)
       {
          IDbConnection db = new SqlConnection(_connectionString);
          /*
@@ -33,11 +33,11 @@ namespace DAL.Helpers
          };
          */
 
-         db.Execute(sql, t);
+         return db.Execute(sql, t);
       }
 
-      //for update and delete
-      public void Execute(string sql, object obj)
+      //for update and delete, returns the number of affected rows
+      public int Execute(string sql, object obj)
       {
          IDbConnection db = new SqlConnection(_connectionString);
 
@@ -47,7 +47,7 @@ namespace DAL.Helpers
          db.Execute(sql, new { Id = 1, Name = "Jane Doe" });
          */
 
-         db.Execute(sql, obj);
+         return db.Execute(sql, obj);
       }
 
       public T Get(string sql, object param)
