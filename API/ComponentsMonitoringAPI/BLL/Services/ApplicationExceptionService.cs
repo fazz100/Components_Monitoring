@@ -2,6 +2,8 @@
 using DAL.Interfaces;
 using DAL.Repositories;
 using ModelsLibrary.Models;
+using ModelsLibrary.Models.API;
+using ModelsLibrary.Models.Enums;
 using System;
 using System.Collections.Generic;
 
@@ -43,15 +45,19 @@ namespace ComponentsMonitoringAPI.BLL.Services
 
       public bool AddException(ApplicationExceptionsModel model)
       {
-         try
+         if (string.IsNullOrEmpty(model.Application_Id)) model.Application_Id = null;
+         if (string.IsNullOrEmpty(model.Application_Group_Id)) model.Application_Group_Id = null;
+
+         // an exception silences either one application or a whole application group, never both or neither
+         if ((model.Application_Id == null) == (model.Application_Group_Id == null))
          {
-            _repository.Insert(model);
-            return true;
+            var apiException = new APIExceptionModel();
+            apiException.Code = ApiResponseCode.ExceptionTargetRequired;
+            throw apiException;
          }
-         catch (Exception)
-         {
-            throw;
-         }
+
+         _repository.Insert(model);
+         return true;
       }
 
       public bool RemoveException(string id)

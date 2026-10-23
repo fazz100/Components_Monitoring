@@ -1,5 +1,4 @@
-﻿using ComponentsMonitoringAPI.Attributes;
-using ComponentsMonitoringAPI.BLL.Interfaces;
+﻿using ComponentsMonitoringAPI.BLL.Interfaces;
 using ComponentsMonitoringAPI.BLL.Services;
 using ModelsLibrary.Models;
 using System;
@@ -8,7 +7,7 @@ using System.Web.Http;
 namespace ComponentsMonitoringAPI.Controllers
 {
    [RoutePrefix("api/application-groups")]
-   [TokenAuthorize]
+   [Authorize]
    public class ApplicationGroupController : CustomApiController
    {
       private readonly IApplicationGroupService _service;

@@ -15,5 +15,13 @@ namespace DAL.Interfaces
 		void Insert(ApplicationModel model);
 		void Update(ApplicationModel model);
 		void Delete(string id, string updatedBy);
+
+		// alert pipeline: health checker -> alert_pending -> ComponentsMonitoringAlertDispatcher
+		void UpdateAlertState(ApplicationModel model);
+		List<ApplicationModel> GetPendingAlerts(int gracePeriodMinutes);
+		void ClearAlertPendingFlags(IEnumerable<string> applicationIds);
+
+		// auto-discovery: every application on a server, including soft-deleted ones
+		List<ApplicationModel> GetAllByServer(string ipAddress);
 	}
 }

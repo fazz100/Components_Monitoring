@@ -30,8 +30,10 @@ Solution file: `ComponentsMonitoring.sln`. Solution folders: `API`, `Application
 | **ComponentsMonitoringAPI** | `API/ComponentsMonitoringAPI` | ASP.NET Web API 2 (+ MVC 5 shell, HelpPage area) | REST API for the dashboard. Hosts controllers and the **BLL** (services). |
 | **DAL** | `Libraries/DAL` | Class library | Data access with repositories over Dapper (one repository uses raw ADO.NET). |
 | **ModelsLibrary** | `Libraries/ModelsLibrary` | Class library | Shared models (entities and API DTOs share one type), enums, custom exceptions, static helpers. Referenced by every other project. |
-| **ComponentsMonitoring** | `Applications/Scheduled Tasks/ComponentsMonitoring` | Console exe (scheduled task) | Health checker. Args: `-schtask`, `-winsvc`, `-web`. Sends HTML failure emails. |
-| **ComponentsMonitoringExceptionsUpdater** | `Applications/Scheduled Tasks/ComponentsMonitoringExceptionsUpdater` | Console exe (scheduled task) | Removes silencing exceptions older than `days_silence_duration` (default 7). |
+| **ComponentsMonitoring** | `Applications/Scheduled Tasks/ComponentsMonitoring` | Console exe (scheduled task) | Health checker. Args: `-schtask`, `-winsvc`, `-web`. Records failures (`alert_pending`); sends **no** email itself. |
+| **ComponentsMonitoringAutoDiscovery** | `Applications/Scheduled Tasks/ComponentsMonitoringAutoDiscovery` | Console exe (scheduled task) | Scans `target_servers` for Windows services / scheduled tasks containing `dg3` (any case) and registers new ones as standalone applications. Never updates or removes existing rows. |
+| **ComponentsMonitoringAlertDispatcher** | `Applications/Scheduled Tasks/ComponentsMonitoringAlertDispatcher` | Console exe (scheduled task) | Emails pending failures as **one HTML digest per application group** and clears the flags. |
+| **ComponentsMonitoringExceptionsUpdater** | `Applications/Scheduled Tasks/ComponentsMonitoringExceptionsUpdater` | Console exe (scheduled task) | Removes silencing exceptions (application and group) older than `days_silence_duration` (default 7). |
 | **CreateAdminUser** | `Applications/Console Applications/CreateAdminUser` | Console exe (one-off) | Seeds the first admin user from `App.config`. |
 | **DPAPIEncryptor** | `Applications/Console Applications/DPAPIEncryptor` | Console exe (one-off) | DPAPI-encrypts the password pepper for config files. |
 | *HelpersLibrary* | `Libraries/HelpersLibrary` | Class library, **not in the .sln** | Abandoned stub (`Class1.cs`, an unreferenced `MailerHelper.cs`). Do not add code here. |
@@ -41,7 +43,9 @@ Solution file: `ComponentsMonitoring.sln`. Solution folders: `API`, `Application
 
 ```
 ComponentsMonitoringAPI ─┐
-ComponentsMonitoring  ───┼──► DAL ──► ModelsLibrary
+ComponentsMonitoring  ───┤
+AlertDispatcher  ────────┤
+AutoDiscovery  ──────────┼──► DAL ──► ModelsLibrary
 ExceptionsUpdater  ──────┤
 CreateAdminUser  ────────┘          (all also reference ModelsLibrary directly)
 DPAPIEncryptor: standalone
@@ -307,7 +311,7 @@ throw apiException;
   **When adding a code:** add the enum member (codes 9xx) **and** an `INSERT INTO response_code` row in `Database/component_monitoring.sql`.
 - **Unexpected errors:** let them bubble up. `TryCatchWrapper` logs at **Error** and returns `{Code:500, Message:"Error", Details:<exception>}`.
 - Login failure is **not** an exception. The OAuth provider calls `context.SetError("invalid_grant", …)`, and `/token` returns HTTP 400 `{ error, error_description }`. Provider code catches exceptions, logs them, and returns `server_error` without the exception text.
-- Exes: `Program.Main` has a top-level `try/catch` that logs and writes to the console. Each `Process*` service method has its own try/catch so one failing component does not stop the others. It logs and emails the failure (`NotifyFailure`) and continues.
+- Exes: `Program.Main` has a top-level `try/catch` that logs and writes to the console. Each `Process*` service method has its own try/catch so one failing component does not stop the others. It logs and records the failure (`MarkFailure`, see §4.9) and continues.
 - Domain-specific exceptions go in `Models/CustomExceptions` and follow the three-constructor `[Serializable]` pattern of `InvalidWebsiteUrlException`.
 - Existing code often wraps methods in `try { … } catch (Exception) { throw; }`. This is harmless but adds nothing. **New code should omit it** unless the catch logs or translates. **Never write `throw ex;`**, because it loses the stack trace. Use `throw;`.
 
@@ -330,6 +334,9 @@ private static LogWriter LOGGER = new LogWriter();
   - `ConfigurationManager.AppSettings["key"]` in exes and libraries.
 - Parse settings with a default fallback where sensible: `!string.IsNullOrEmpty(x) ? int.Parse(x) : 7`.
 - appSettings keys are **`snake_case`** (`smtp_host`, `days_silence_duration`, `encrypted_pepper`). The API's older key `reactAppUrl` and the framework key `owin:AutomaticAppStartup` are exceptions. Use snake_case for new keys.
+- AutoDiscovery keys:
+  - `target_servers`: comma- or semicolon-separated hosts to scan, stored as-is in `applications.ip_address`.
+  - `created_by`: written to `applications.created_by` for discovered rows. The default is `AutoDiscovery`.
 - API OAuth keys:
   - `access_token_expiry_in_minutes` (15)
   - `refresh_token_expiry_in_days` (7)
@@ -337,14 +344,37 @@ private static LogWriter LOGGER = new LogWriter();
 - Secrets at rest use **DPAPI** (`DpapiHelper.Encrypt/Decrypt`, `DataProtectionScope.LocalMachine`). The encrypted pepper is produced by `DPAPIEncryptor` and stored in `encrypted_pepper`.
 - **Passwords:** Argon2id (salt 16 bytes, `DegreeOfParallelism = 8`, `Iterations = 4`, `MemorySize = 65536`, 32-byte hash) over `password + pepper`. Stored as UTF-8 bytes of `"{saltB64}:{hashB64}"` in `user.password varbinary(max)`. Any new auth code must use exactly these parameters, or existing hashes will stop verifying.
 
-### 4.9 Email (scheduled tasks)
+### 4.9 Alerts & email (scheduled tasks)
 
-`ComponentsMonitoring/Helpers/MailerHelper.Send(MailMessage)`:
+Failure detection and email are **decoupled**:
 
-- Static method, SMTP settings from `smtp_*` appSettings, `IsBodyHtml = true`.
-- Recipients come from `mail_to`/`mail_cc`/`mail_bcc`, split on `,` or `;` via `FormatEmailAddresses`.
-- Alerts are built in `ComponentMonitoringService.NotifyFailure` → `SendEmail`, which wraps the message in `<html><body><p>…</p></body></html>` and uses the subject `"[{region}] Component Monitoring Alert: {appName}"`. Line breaks in messages are `<br/>`.
-- The `send_email` appSetting exists in `App.config` but **is not read by any code**. Do not assume it disables sending.
+```
+ComponentsMonitoring (checker)  ──►  applications.alert_pending / failure_detected_at / failure_details
+                                                     │
+ComponentsMonitoringAlertDispatcher  ◄───────────────┘  one digest email per application group
+```
+
+- **Checker** (`ComponentMonitoringService`):
+  - Every failure calls `MarkFailure(app | appId, htmlMessage)`. It sets `Working` → `NotWorking`.
+  - If the app is now `NotWorking`, it sets `Alert_Pending = true` and `Failure_Details = message`. It keeps the **first** `Failure_Detected_At` of the outage.
+  - It persists with `ApplicationRepository.UpdateAlertState`.
+  - Apps marked *Known Issue* / *No Longer Needed* are not alerted.
+  - Every passing check calls `MarkRecovered(app)`, which sets `Working` and clears all three alert columns.
+  - The checker sends **no** email.
+- **`UpdateAlertState` vs `Update`:** only the checker writes the alert columns, through `UpdateAlertState`. `Update` (used by dashboard edits) deliberately does not touch them, so saving an app in the UI can't wipe a pending alert.
+- **Dispatcher** (`AlertDispatcherService.DispatchAlerts`):
+  - Reads `GetPendingAlerts(grace_period_minutes)`: `NotWorking` + `alert_pending` + first detection older than the grace period (default 2 minutes, so failures in the same group batch together).
+  - Groups the results by `Application_Group_Id`, with standalone apps under "Individual Applications".
+  - Sends one email per group:
+    - Subject `"[{region}] Component Monitoring Alert: Group Alert - {GroupName} ({Count} Components Down)"`
+    - HTML table: Name, Type, Host, Detection Time (via `DateTimeHelper`), Details. Values are HTML-encoded except the checker's `<br/>` breaks.
+  - Calls `ClearAlertPendingFlags` only for groups whose email actually sent. Apps that became silenced meanwhile are cleared without an email.
+  - A still-failing app is re-flagged on the next checker run, so it is re-alerted on every dispatch while down. This matches the old per-run emails.
+- **`ComponentsMonitoringAlertDispatcher/Helpers/MailerHelper`:**
+  - `Send(MailMessage)` returns `bool` (false = not sent, alerts stay pending).
+  - SMTP settings come from `smtp_*`; recipients from `mail_to`/`mail_cc`/`mail_bcc`, split on `,` or `;` via `FormatEmailAddresses`.
+  - `mail_*`/`smtp_*`/`region`/`grace_period_minutes` live in the **dispatcher's** `App.config`.
+- **Deployment:** the dispatcher must be scheduled (e.g. every 5 minutes) next to the checker, or no alert email is sent at all.
 
 ### 4.10 Front end
 
@@ -441,11 +471,12 @@ private static LogWriter LOGGER = new LogWriter();
    - Load components with `_applicationRepository.GetAll("{application_type}")`.
    - Wrap the run in try/catch and log start/end.
    - Check each item in its own try/catch so one failure does not stop the rest.
-   - On failure, flip `Working_Status` to `NotWorking` **only if it is currently `Working`**, persist via `_applicationRepository.Update`, and call `NotifyFailure(appName, htmlMessage)`.
+   - On failure, call `MarkFailure(app, htmlMessage)` (or `MarkFailure(appId, …)` if the app isn't loaded). On success, call `MarkRecovered(app)`. Never set `Working_Status`/alert columns by hand or send email from the checker (§4.9).
 2. Add a `case "-{flag}":` to `Program.Main` and to `ShowUsage()`.
-3. Respect silencing: `IApplicationRepository.GetAll(type)` defaults to `includeExceptions = false`, so apps with an active exception are skipped automatically. Do not pass `true` from a checker. (The API's `IApplicationService` defaults to `true` because the dashboard shows everything.)
+3. Respect silencing: `IApplicationRepository.GetAll(type)` defaults to `includeExceptions = false`, so apps with an active exception, **direct or through their application group**, are skipped automatically. Do not pass `true` from a checker. (The API's `IApplicationService` defaults to `true` because the dashboard shows everything.)
    - `GetAll` also has `includeInactiveGroups`, which **defaults to `true` in the repository** so checkers keep monitoring apps whose application group was soft-deleted. Only the API passes `false` (its default), so the dashboard hides those apps unless the user ticks "Include Inactive Applications Group".
-   - `ApplicationRepository.Get` and `Update` must keep the same column set. The checker does `Get(id)` followed by `Update(app)`, so a column written by `Update` but not read by `Get` is wiped on every run.
+   - `ApplicationRepository.Get` must read every column that `Update` and `UpdateAlertState` write. The checker does `Get(id)` followed by `Update(app)`/`UpdateAlertState(app)`, so a column written but not read by `Get` is wiped on every run.
+   - Group membership is **not** a column of `applications`, and neither `Update` nor `UpdateAlertState` writes it, so checker runs can't change an app's system.
 4. Allowed `application_type` values: `"scheduled task"`, `"windows service"`, `"website"`. They are compared as literal strings, so keep the exact spelling.
 
 ---
@@ -454,11 +485,29 @@ private static LogWriter LOGGER = new LogWriter();
 
 - **Application:** a monitored component (row in `applications`). `application_type` decides which checker handles it. `url_or_app_name` holds the task name, service name, or URL. `ip_address` holds the server host.
 - **Working status:** `WorkingStatus` enum. `0` NotWorking, `1` Working, `2` KnownIssue, `3` NoLongerNeeded.
-- **Exception (application exception):** a *silencing* record in `application_exceptions`. It suppresses alerts for an app until the ExceptionsUpdater removes it after `days_silence_duration` days. These are unrelated to .NET exceptions.
-- **Application group:** a named system that applications belong to (`application_group`, soft-deleted via `is_deleted`). Membership is `applications.application_group_id` (nullable FK, `NULL` = standalone). The Applications page sorts by group by default and hides apps whose group is deleted unless "Include Inactive Applications Group" is checked. Groups are managed on the Application Groups page (`views/application-group.jsx`).
+- **Exception (application exception):** a *silencing* record in `application_exceptions`. It suppresses checks and alerts until the ExceptionsUpdater removes it after `days_silence_duration` days. These are unrelated to .NET exceptions.
+  - It targets **exactly one** of `application_id` (one app) or `application_group_id` (a **group exception**, "Silence System", which silences every app in the group). `ApplicationExceptionService.AddException` enforces this with response code 903.
+  - Queries that check "is silenced" must match both: `e.application_id = a.id or (e.application_group_id is not null and e.application_group_id = aga.application_group_id)`, where `aga` is the `left join application_group_applications aga on aga.application_id = a.id`.
+  - Joins from `application_exceptions` to `applications`/`application_group` must be `left join`s, because group exceptions have no `application_id`.
+- **Alert pending:** `applications.alert_pending = 1` means the checker found a failure that the AlertDispatcher hasn't emailed yet. `failure_detected_at` is the first detection of the outage, and `failure_details` is the latest reason.
+- **Group health (dashboard):** each group header on the Applications page shows **HEALTHY** unless at least one member is `NotWorking`, which makes it **DEGRADED**.
+- **Application group (system):** `application_group` is a **lookup table** of systems, written only by the Application Groups page (`views/application-group.jsx`) and soft-deleted via `is_deleted`.
+  - **Membership** lives in `application_group_applications` (`id`, `application_group_id`, `application_id`), with **one row per application** (`UNIQUE(application_id)`). No row means the app is standalone. `applications` has no group column.
+  - **Reads:** `ApplicationModel.Application_Group_Id` is filled by `left join application_group_applications aga on aga.application_id = a.id`.
+  - **Writes:** only `ApplicationService.SaveGroupMembership`, called on create and update, writes membership:
+    - It inserts the pairing when a system is chosen.
+    - It updates the same row when the system changes.
+    - It deletes the row when "None (Standalone)" is chosen.
+  - Soft-deleting an app or a group keeps the pairing.
+  - The Applications page groups rows by system and hides apps whose group is deleted unless "Include Inactive Applications Group" is checked.
 - **Application database:** a connection string associated with an app (`application_databases`) whose connectivity can be tested.
 - **Refresh token:** row in `refresh_tokens` (SHA-512 `token_hash`, single-use, `is_revoked`). It replaced the old `user_session` table, which the migration script drops once you run its final step.
 - **API client:** row in `api_clients`. An application allowed to request tokens from `/token` (e.g. `components_monitoring_react_app`).
+- **Auto-discovery:** `ComponentsMonitoringAutoDiscovery` (`AutoDiscoveryService.DiscoverComponents`) registers DG3 components it finds on `target_servers`.
+  - **Services:** found with `ServiceController.GetServices(server)` and matched on `ServiceName` or `DisplayName`. `url_or_app_name` is the service name and `application_name` the display name.
+  - **Scheduled tasks:** found with `TaskService(server).RootFolder.EnumerateTasks(…, recurse: true)` and matched on name or path. `url_or_app_name` is the task name for root-folder tasks and the full path for subfolder tasks, matching what the checker's `GetTask` expects.
+  - **Duplicate check:** same `ip_address` + `application_type` + `url_or_app_name` (case-insensitive, leading `\` ignored), via `ApplicationRepository.GetAllByServer`. Soft-deleted rows count as existing, so deleting a component on the dashboard keeps it out of discovery.
+  - **New rows:** `Working` with the scanned `is_enabled` / `service_status`, and no `application_group_applications` row (standalone).
 
 ---
 
@@ -472,7 +521,7 @@ These exist today. Do not replicate them in new code. Fix them only when the tas
 - Secrets are committed: the DPAPI entropy string and SQL credentials in `App.config`.
 - `ProtectedRoute` is a no-op and its usages in `App.jsx` are commented out, so the front-end routes are unguarded. The API's `[Authorize]` still enforces auth.
 - `[refresh_tokens]` has no `client_id` column, so a refresh token is not bound to the client that received it. Every refresh request is still checked against `[api_clients]`.
-- `ComponentsMonitoringAPI.csproj` and `ComponentsMonitoringExceptionsUpdater.csproj` reference `Dg3.CommonLibraries.LogWriter.dll` via a `bin\Debug` hint path of another project. New references to in-house DLLs should point at `/dependencies`.
+- `ComponentsMonitoring.csproj` resolves Dapper/TaskScheduler from `Deployment\ComponentsMonitoring_ST` instead of `/packages`. New references to in-house DLLs should point at `/dependencies`, and NuGet references at `/packages`.
 - `APIExceptionModel` business errors return HTTP 500 rather than a 4xx.
 - `ConfigValue` in `ModelsLibrary.Models.API` contains unrelated, unused keys (MSMQ/SFTP).
 - `ExecutionLogRepository` / `ExecutionBatchRepository` are empty stubs, and `HelpersLibrary` is dead code.

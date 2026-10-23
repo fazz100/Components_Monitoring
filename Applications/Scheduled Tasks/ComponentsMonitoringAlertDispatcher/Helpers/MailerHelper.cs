@@ -1,25 +1,21 @@
 ﻿using Dg3.CommonLibraries;
 using System;
-using System.Collections.Generic;
 using System.Configuration;
-using System.Linq;
 using System.Net;
 using System.Net.Mail;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace ComponentsMonitoring.Helpers
+namespace ComponentsMonitoringAlertDispatcher.Helpers
 {
-	public class MailerHelper
-	{
-      public static void Send(MailMessage mailMessage)
+   public class MailerHelper
+   {
+      // Returns false if the email could not be sent, so the caller can keep the alerts pending
+      public static bool Send(MailMessage mailMessage)
       {
          try
          {
             mailMessage.IsBodyHtml = true;
 
             string mailHost = ConfigurationManager.AppSettings["smtp_host"];
-            //mailHost = "localhost";
 
             int mailPort = 25;
             int.TryParse(ConfigurationManager.AppSettings["smtp_port"], out mailPort);
@@ -34,11 +30,14 @@ namespace ComponentsMonitoring.Helpers
 
                client.Send(mailMessage);
             }
+
+            return true;
          }
          catch (Exception ex)
          {
             LogWriter log = new LogWriter();
             log.Error(ex);
+            return false;
          }
       }
 

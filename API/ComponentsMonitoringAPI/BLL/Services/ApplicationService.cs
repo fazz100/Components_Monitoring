@@ -13,11 +13,13 @@ namespace ComponentsMonitoringAPI.BLL.Services
    {
       private readonly IApplicationRepository _repo;
       private readonly IApplicationDatabaseRepository _appDBRepo;
+      private readonly IApplicationGroupApplicationRepository _groupMembershipRepo;
       private static LogWriter LOGGER = new LogWriter();
 
-      public ApplicationService() { 
+      public ApplicationService() {
          _repo = new DAL.Repositories.ApplicationRepository();
-         _appDBRepo = new DAL.Repositories.ApplicationDatabaseRepository(); 
+         _appDBRepo = new DAL.Repositories.ApplicationDatabaseRepository();
+         _groupMembershipRepo = new DAL.Repositories.ApplicationGroupApplicationRepository();
       }
 
       public List<ApplicationModel> GetApplications(string type,string appName=null, bool includeExceptions = true, bool includeInactiveGroups = false)
@@ -40,8 +42,9 @@ namespace ComponentsMonitoringAPI.BLL.Services
       }
 
       public void Create(ApplicationModel model)
-      { 
+      {
          _repo.Insert(model);
+         SaveGroupMembership(model);
 
          foreach (var appDb in model.Databases)
          {
@@ -63,7 +66,38 @@ namespace ComponentsMonitoringAPI.BLL.Services
          }
       
       }
-      public void Update(ApplicationModel model) => _repo.Update(model);
+      public void Update(ApplicationModel model)
+      {
+         _repo.Update(model);
+         SaveGroupMembership(model);
+      }
       public void Delete(string id, string user) => _repo.Delete(id, user);
+
+      // Keeps application_group_applications in line with the system selected for the application:
+      // one pairing row when a system is selected, no row when the application is standalone
+      private void SaveGroupMembership(ApplicationModel model)
+      {
+         var membership = _groupMembershipRepo.GetByApplicationId(model.Id);
+
+         if (string.IsNullOrEmpty(model.Application_Group_Id))
+         {
+            if (membership != null)
+               _groupMembershipRepo.DeleteByApplicationId(model.Id);
+         }
+         else if (membership == null)
+         {
+            _groupMembershipRepo.Insert(new ApplicationGroupApplicationModel
+            {
+               Id = Guid.NewGuid().ToString(),
+               Application_Group_Id = model.Application_Group_Id,
+               Application_Id = model.Id
+            });
+         }
+         else if (membership.Application_Group_Id != model.Application_Group_Id)
+         {
+            membership.Application_Group_Id = model.Application_Group_Id;
+            _groupMembershipRepo.Update(membership);
+         }
+      }
    }
 }

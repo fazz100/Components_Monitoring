@@ -1,22 +1,25 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getExceptions, deleteException, createException } from '../api/application-exception-api';
 import { getApplications } from '../api/application-api';
+import { getApplicationGroups } from '../api/application-group-api';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faEdit, faTrash, faBellSlash, faBell } from '@fortawesome/free-solid-svg-icons';
+import { faTrash } from '@fortawesome/free-solid-svg-icons';
 import { getConfig } from '../config/config';
 
 function ApplicationException() {
     const [exceptions, setExceptions] = useState([]);
     const [apps, setApps] = useState([]);
+    const [groups, setGroups] = useState([]);
     const [showModal, setShowModal] = useState(false);
-    const [formData, setFormData] = useState({ Application_Id: '', Reason_For_Exception: '' });
+    const [silenceMode, setSilenceMode] = useState('app'); // 'app' = Single Component Mute, 'group' = Entire System Group Mute
+    const [formData, setFormData] = useState({ Application_Id: '', Application_Group_Id: '', Reason_For_Exception: '' });
 
     const [searchTerm, setSearchTerm] = useState('');     
     const [searchQuery, setSearchQuery] = useState('');   
 
     // non async config fetching
     const [config, setConfig] = useState(null);
-    const [isConfigLoading, setIsConfigLoading] = useState(true);
+    const [, setIsConfigLoading] = useState(true);
 
     
     useEffect(() => {
@@ -36,9 +39,14 @@ function ApplicationException() {
 
     const fetchData = async () => {
         try {
-            const [exRes, appRes] = await Promise.all([getExceptions(searchQuery), getApplications({includeExceptions:false})]);
+            const [exRes, appRes, groupRes] = await Promise.all([
+                getExceptions(searchQuery),
+                getApplications({includeExceptions:false}),
+                getApplicationGroups()
+            ]);
             setExceptions(exRes.Data || []);
             setApps(appRes.Data || []);
+            setGroups(groupRes.Data || []);
         } catch (err) { console.error(err); }
     };
 
@@ -92,12 +100,6 @@ function ApplicationException() {
         }
         setSortConfig({ key, direction });
     };
-
-    // Helper to show sort arrows
-    const getSortIcon = (name) => {
-        if (sortConfig.key !== name) return '↕️';
-        return sortConfig.direction === 'asc' ? '🔼' : '🔽';
-    };
    
 
     // Now this only fires when 'type' changes or the Search button is clicked
@@ -113,14 +115,26 @@ function ApplicationException() {
 
     const handleSave = async (e) => {
         e.preventDefault();
-        const res = await createException(formData);
-        if (res.Data === true) {
-            alert("Exception created: Alerts temporarily silenced for " + config.DAYS_SILENCE_DURATION + " days.");
-            setShowModal(false);
-            setFormData({ Application_Id: '', Reason_For_Exception: '' });
-            fetchData();
-        }
+        // send only the target of the selected mode; the API requires exactly one of the two
+        const payload = {
+            Application_Id: silenceMode === 'app' ? formData.Application_Id : null,
+            Application_Group_Id: silenceMode === 'group' ? formData.Application_Group_Id : null,
+            Reason_For_Exception: formData.Reason_For_Exception
+        };
+        try {
+            const res = await createException(payload);
+            if (res.Data === true) {
+                alert("Exception created: Alerts temporarily silenced for " + config.DAYS_SILENCE_DURATION + " days.");
+                setShowModal(false);
+                setSilenceMode('app');
+                setFormData({ Application_Id: '', Application_Group_Id: '', Reason_For_Exception: '' });
+                fetchData();
+            }
+        } catch (err) { alert("Error: " + err.message); }
     };
+
+    // groups that are not already silenced
+    const availableGroups = groups.filter(g => !exceptions.some(ex => ex.Application_Group_Id === g.Id));
 
     const handleRemove = async (id) => {
         if (window.confirm("Resume monitoring for this application?")) {
@@ -208,7 +222,7 @@ function ApplicationException() {
                     {/* 4. Use sortedExceptions here instead of exceptions */}
                     {sortedExceptions.map(ex => (
                         <tr key={ex.Id}>
-                            <td>{ex.Application_Name || ex.Application_Id}</td>
+                            <td>{ex.Application_Group_Id ? `System: ${ex.Group_Name}` : (ex.Application_Name || ex.Application_Id)}</td>
                             <td>{ex.Reason_For_Exception}</td>
                             <td>{new Date(ex.Created_Date).toLocaleString()}</td>
                             <td style={{ textAlign: 'center' }}>
@@ -224,11 +238,34 @@ function ApplicationException() {
                     <div className="modal-content">
                         <h3>Silence Application</h3>
                         <form onSubmit={handleSave}>
-                            <label>Select Application:</label>
-                            <select required value={formData.Application_Id} onChange={e => setFormData({...formData, Application_Id: e.target.value})}>
-                                <option value="">-- Select --</option>
-                                {apps.map(a => <option key={a.Id} value={a.Id}>{a.Application_Name}</option>)}
-                            </select>
+                            <label>Silence:</label>
+                            <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 'normal' }}>
+                                    <input type="radio" name="silenceMode" value="app" checked={silenceMode === 'app'} onChange={() => setSilenceMode('app')} style={{ width: 'auto' }} />
+                                    Single Component
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 'normal' }}>
+                                    <input type="radio" name="silenceMode" value="group" checked={silenceMode === 'group'} onChange={() => setSilenceMode('group')} style={{ width: 'auto' }} />
+                                    Entire System Group
+                                </label>
+                            </div>
+                            {silenceMode === 'app' ? (
+                                <>
+                                    <label>Select Application:</label>
+                                    <select required value={formData.Application_Id} onChange={e => setFormData({...formData, Application_Id: e.target.value})}>
+                                        <option value="">-- Select --</option>
+                                        {apps.map(a => <option key={a.Id} value={a.Id}>{a.Application_Name}</option>)}
+                                    </select>
+                                </>
+                            ) : (
+                                <>
+                                    <label>Select Application Group:</label>
+                                    <select required value={formData.Application_Group_Id} onChange={e => setFormData({...formData, Application_Group_Id: e.target.value})}>
+                                        <option value="">-- Select --</option>
+                                        {availableGroups.map(g => <option key={g.Id} value={g.Id}>{g.Application_Group_Name}</option>)}
+                                    </select>
+                                </>
+                            )}
                             <label>Reason:</label>
                             <textarea required value={formData.Reason_For_Exception} onChange={e => setFormData({...formData, Reason_For_Exception: e.target.value})} />
                             <div style={{ marginTop: '1rem' }}>

@@ -34,7 +34,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Dg3.CommonLibraries.LogWriter">
-      <HintPath>..\ComponentsMonitoring\bin\Debug\Dg3.CommonLibraries.LogWriter.dll</HintPath>
+      <HintPath>..\..\..\dependencies\Dg3.CommonLibraries.LogWriter.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Configuration" />

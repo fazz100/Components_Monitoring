@@ -1,9 +1,9 @@
 ﻿using ComponentsMonitoring.BLL.Interfaces;
-using ComponentsMonitoring.Helpers;
 using DAL.Interfaces;
 using DAL.Repositories;
 using Dg3.CommonLibraries;
 using Microsoft.Win32.TaskScheduler;
+using ModelsLibrary.Models;
 using ModelsLibrary.Models.CustomExceptions;
 using ModelsLibrary.Models.Enums;
 using System;
@@ -12,7 +12,6 @@ using System.Configuration;
 using System.Diagnostics.Eventing.Reader;
 using System.IO;
 using System.Linq;
-using System.Net.Mail;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading.Tasks;
@@ -77,7 +76,7 @@ namespace ComponentsMonitoring.BLL.Services
                   if (t == null)
                   {
                      LOGGER.Info($"Scheduled task {taskName} was not found on server {serverName ?? "Local"}.");
-                     NotifyFailure(appName, $"A scheduled task was not found on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}");
+                     MarkFailure(taskId, $"A scheduled task was not found on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}");
                      continue;
                   }
 
@@ -90,11 +89,10 @@ namespace ComponentsMonitoring.BLL.Services
 
                      if (app.Working_Status == (int)WorkingStatus.Working)
                      {
-                        app.Working_Status = (int)WorkingStatus.NotWorking;
                         app.Is_Enabled = false;
                         _applicationRepository.Update(app);
                      }
-                     NotifyFailure(appName, $"A scheduled task was detected as Disabled on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}");
+                     MarkFailure(app, $"A scheduled task was detected as Disabled on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}");
 
                      errorCount++;
                      continue;
@@ -118,13 +116,7 @@ namespace ComponentsMonitoring.BLL.Services
                      string taskErrorMessage = GetTaskErrorMessage(taskName, serverName);
                      LOGGER.Info($"Scheduled task {taskName} on {serverName ?? "Local"} has failed with Exit Code: {t.LastTaskResult}." + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
 
-                     if (app.Working_Status == (int)WorkingStatus.Working)
-                     {
-                        app.Working_Status = (int)WorkingStatus.NotWorking;
-                        _applicationRepository.Update(app);
-                     }
-
-                     NotifyFailure(appName, $"A scheduled task has failed with Exit Code: {t.LastTaskResult} on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}" + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
+                     MarkFailure(app, $"A scheduled task has failed with Exit Code: {t.LastTaskResult} on server: {serverName ?? "Local"}.<br/>Task Name: {taskName}" + (!string.IsNullOrEmpty(taskErrorMessage) ? ("<br/>Additional error message: " + taskErrorMessage) : ""));
 
                      errorCount++;
                      continue;
@@ -143,24 +135,14 @@ namespace ComponentsMonitoring.BLL.Services
                         string taskErrorMessage = GetTaskErrorMessage(taskName, serverName);
                         LOGGER.Info($"Scheduled task {taskName} on {serverName ?? "Local"} has failed to run on its schedule. Last run was {actualMinutesSinceRun:F0}m ago.");
 
-                        if (app.Working_Status == (int)WorkingStatus.Working)
-                        {
-                           app.Working_Status = (int)WorkingStatus.NotWorking;
-                           _applicationRepository.Update(app);
-                        }
-
-                        NotifyFailure(appName, $"A scheduled task has failed to run on its schedule on server: {serverName ?? "Local"}. Last run was {actualMinutesSinceRun:F0}m ago.<br/>Task Name: {taskName}");
+                        MarkFailure(app, $"A scheduled task has failed to run on its schedule on server: {serverName ?? "Local"}. Last run was {actualMinutesSinceRun:F0}m ago.<br/>Task Name: {taskName}");
                         errorCount++;
                      }
                   }
 
                   if (errorCount < 1)
                   {
-                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
-                     {
-                        app.Working_Status = (int)WorkingStatus.Working;
-                        _applicationRepository.Update(app);
-                     }
+                     MarkRecovered(app);
                   }
                }
                catch (Exception ex)
@@ -317,10 +299,10 @@ namespace ComponentsMonitoring.BLL.Services
                      LOGGER.Info($"Windows service {serviceData.Item3} on server {serverName} is running.");
                      if (app.Working_Status == (int)WorkingStatus.NotWorking)
                      {
-                        app.Working_Status = (int)WorkingStatus.Working;
                         app.Service_Status = "Running";
                         _applicationRepository.Update(app);
                      }
+                     MarkRecovered(app);
                   }
                   else
                   {
@@ -336,6 +318,7 @@ namespace ComponentsMonitoring.BLL.Services
                            app.Service_Status = "Stopped";
                            _applicationRepository.Update(app);
                         }
+                        MarkRecovered(app);
                      }
                      else //Automatic or Automatic (Delayed Start) and it's stopped
                      {
@@ -343,12 +326,11 @@ namespace ComponentsMonitoring.BLL.Services
 
                         if (app.Working_Status == (int)WorkingStatus.Working)
                         {
-                           app.Working_Status = (int)WorkingStatus.NotWorking;
                            app.Service_Status = "Stopped";
                            _applicationRepository.Update(app);
                         }
 
-                        NotifyFailure(serviceData.Item2, $"A Windows service was detected as {sc.Status.ToString()} on server: {serverName}.<br/>Service Name: {serviceData.Item3}");
+                        MarkFailure(app, $"A Windows service was detected as {sc.Status.ToString()} on server: {serverName}.<br/>Service Name: {serviceData.Item3}");
                      }
                   }
                }
@@ -359,15 +341,11 @@ namespace ComponentsMonitoring.BLL.Services
                var app = _applicationRepository.Get(serviceData.Item1);
                if (app != null)
                {
-                  if (app.Working_Status == (int)WorkingStatus.Working)
-                  {
-                     app.Working_Status = (int)WorkingStatus.NotWorking;
-                  }
                   app.Service_Status = "Stopped";
                   _applicationRepository.Update(app);
                }
 
-               NotifyFailure(serviceData.Item2, $"A Windows service was not found on server {serverName}.<br/>Service Name: {serviceData.Item3}");
+               MarkFailure(app, $"A Windows service was not found on server {serverName}.<br/>Service Name: {serviceData.Item3}");
             }
             catch (Exception ex)
             {
@@ -422,28 +400,18 @@ namespace ComponentsMonitoring.BLL.Services
                   if (statusCode >= 200 && statusCode < 400)
                   {
                      LOGGER.Info($"Website {url.Item2},{url.Item3} is UP. Status Code: {statusCode}");
-
-                     if (app.Working_Status == (int)WorkingStatus.NotWorking)
-                     {
-                        app.Working_Status = (int)WorkingStatus.Working;
-                        _applicationRepository.Update(app);
-                     }
+                     MarkRecovered(app);
                   }
                   else
                   {
-                     if (app.Working_Status == (int)WorkingStatus.Working)
-                     {
-                        app.Working_Status = (int)WorkingStatus.NotWorking;
-                        _applicationRepository.Update(app);
-                     }
-                     NotifyFailure(url.Item2, $"Website landing page returned an unexpected status: {statusCode}");
+                     MarkFailure(app, $"Website landing page returned an unexpected status: {statusCode}");
                   }
                }
             }
             catch (UriFormatException)
             {
                LOGGER.Info($"URL Format is invalid for {url.Item2}: {url.Item3}");
-               NotifyFailure(url.Item2, $"The URL provided for {url.Item2} is not a valid format.");
+               MarkFailure(url.Item1, $"The URL provided for {url.Item2} is not a valid format.");
             }
             catch (System.Net.WebException wex)
             {
@@ -455,7 +423,7 @@ namespace ComponentsMonitoring.BLL.Services
                }
 
                LOGGER.Info($"Website {url.Item2},{url.Item3} is DOWN. Error: {errorDetails}");
-               NotifyFailure(url.Item2, $"The website landing page is unreachable.<br/>URL: {url.Item3}<br/>Error: {errorDetails}");
+               MarkFailure(url.Item1, $"The website landing page is unreachable.<br/>URL: {url.Item3}<br/>Error: {errorDetails}");
             }
             catch (Exception ex)
             {
@@ -466,41 +434,63 @@ namespace ComponentsMonitoring.BLL.Services
          }
       }
 
-      private void NotifyFailure(string taskname, string message)
+      // Flags a failed application for the alert dispatcher (ComponentsMonitoringAlertDispatcher), which emails
+      // pending failures as one digest per application group. No email is sent from here.
+      private void MarkFailure(string appId, string message)
       {
-         SendEmail(taskname, message, null);
+         MarkFailure(_applicationRepository.Get(appId), message);
       }
 
-      private void SendEmail(string taskname, string messageBody, byte[] file)
+      private void MarkFailure(ApplicationModel app, string message)
       {
-         // Original email logic remains unchanged
-         try
+         if (app == null)
+            return;
+
+         if (app.Working_Status == (int)WorkingStatus.Working)
+            app.Working_Status = (int)WorkingStatus.NotWorking;
+
+         // Known Issue / No Longer Needed applications are not alerted
+         if (app.Working_Status != (int)WorkingStatus.NotWorking)
          {
-            byte[] reportContent = file;
-            var region = ConfigurationManager.AppSettings["region"];
-
-            string MAIL_FROM = ConfigurationManager.AppSettings["mail_from"];
-            string MAIL_TO = ConfigurationManager.AppSettings["mail_to"];
-            string MAIL_CC = ConfigurationManager.AppSettings["mail_cc"];
-            string MAIL_BCC = ConfigurationManager.AppSettings["mail_bcc"];
-
-            string MAIL_SUBJECT = string.Format($"[{region}] Component Monitoring Alert: " + taskname);
-
-            StringBuilder msgBody = new StringBuilder();
-            msgBody.AppendLine("<html><body><p>" + messageBody + "</p></body></html>");
-
-            using (MailMessage mailMsg = new MailMessage(MAIL_FROM, MailerHelper.FormatEmailAddresses(MAIL_TO), MAIL_SUBJECT, msgBody.ToString()))
-            {
-               mailMsg.IsBodyHtml = true;
-               if (!string.IsNullOrWhiteSpace(MAIL_CC)) mailMsg.CC.Add(MailerHelper.FormatEmailAddresses(MAIL_CC));
-               if (!string.IsNullOrWhiteSpace(MAIL_BCC)) mailMsg.Bcc.Add(MailerHelper.FormatEmailAddresses(MAIL_BCC));
-
-               MailerHelper.Send(mailMsg);
-            }
+            LOGGER.Info($"{app.Application_Name} failed a check but is marked as {(WorkingStatus)app.Working_Status}. No alert queued.");
+            return;
          }
-         catch (Exception ex)
+
+         app.Alert_Pending = true;
+         if (app.Failure_Detected_At == null)
+            app.Failure_Detected_At = DateTime.UtcNow; // keep the first detection of the current outage
+         app.Failure_Details = message;
+
+         _applicationRepository.UpdateAlertState(app);
+         LOGGER.Info($"{app.Application_Name} is Not Working. Alert queued for the dispatcher.");
+      }
+
+      // Clears the alert state once a check passes again
+      private void MarkRecovered(ApplicationModel app)
+      {
+         if (app == null)
+            return;
+
+         bool changed = false;
+
+         if (app.Working_Status == (int)WorkingStatus.NotWorking)
          {
-            LOGGER.Error(ex.ToString());
+            app.Working_Status = (int)WorkingStatus.Working;
+            changed = true;
+         }
+
+         if (app.Alert_Pending || app.Failure_Detected_At != null || app.Failure_Details != null)
+         {
+            app.Alert_Pending = false;
+            app.Failure_Detected_At = null;
+            app.Failure_Details = null;
+            changed = true;
+         }
+
+         if (changed)
+         {
+            _applicationRepository.UpdateAlertState(app);
+            LOGGER.Info($"{app.Application_Name} has recovered. Alert state cleared.");
          }
       }
    }

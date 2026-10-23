@@ -54,6 +54,7 @@
     <Compile Include="Models\ApiClientModel.cs" />
     <Compile Include="Models\ApplicationDatabaseModel.cs" />
     <Compile Include="Models\ApplicationExceptionsModel.cs" />
+    <Compile Include="Models\ApplicationGroupApplicationModel.cs" />
     <Compile Include="Models\ApplicationGroupModel.cs" />
     <Compile Include="Models\ApplicationModel.cs" />
     <Compile Include="Models\CustomExceptions\InvalidWebsiteUrlException.cs" />

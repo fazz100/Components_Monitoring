@@ -58,6 +58,7 @@
     <Compile Include="Interfaces\IApiClientRepository.cs" />
     <Compile Include="Interfaces\IApplicationDatabaseRepository.cs" />
     <Compile Include="Interfaces\IApplicationExceptionRepository.cs" />
+    <Compile Include="Interfaces\IApplicationGroupApplicationRepository.cs" />
     <Compile Include="Interfaces\IApplicationGroupRepository.cs" />
     <Compile Include="Interfaces\IApplicationRepository.cs" />
     <Compile Include="Interfaces\IExecutionBatchRepository.cs" />
@@ -69,6 +70,7 @@
     <Compile Include="Repositories\ApiClientRepository.cs" />
     <Compile Include="Repositories\ApplicationDatabaseRepository.cs" />
     <Compile Include="Repositories\ApplicationExceptionRepository.cs" />
+    <Compile Include="Repositories\ApplicationGroupApplicationRepository.cs" />
     <Compile Include="Repositories\ApplicationGroupRepository.cs" />
     <Compile Include="Repositories\ApplicationRepository.cs" />
     <Compile Include="Repositories\ExecutionBatchRepository.cs" />

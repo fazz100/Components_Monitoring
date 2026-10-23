@@ -20,6 +20,9 @@ id nvarchar(50) not null PRIMARY KEY  -- guid
 ,updated_date datetime null
 ,updated_by nvarchar(50) null
 ,is_deleted bit default 0 not null
+,alert_pending bit not null default 0 --1 = failure detected, waiting for ComponentsMonitoringAlertDispatcher to email it
+,failure_detected_at datetime null --UTC time of the first failure in the current outage
+,failure_details nvarchar(max) null --reason for the latest failure, shown in the digest email
 )
 
 CREATE TABLE [dbo].[user](
@@ -147,10 +150,23 @@ INSERT INTO [dbo].[response_code]
            ,getdate())
 GO
 
+INSERT INTO [dbo].[response_code]
+           ([code]
+           ,[name]
+           ,[message]
+           ,[created_date])
+     VALUES
+           (903
+           ,'ExceptionTargetRequired'
+           ,'Select either an application or an application group to silence.'
+           ,getdate())
+GO
+
 create table application_exceptions
 (
 id nvarchar(50) not null PRIMARY KEY
-,application_id nvarchar(50) not null
+,application_id nvarchar(50) null --null for a group-wide exception
+,application_group_id nvarchar(50) null --silences every application in the group
 ,reason_for_exception nvarchar(300) null
 ,created_by nvarchar(50) null
 ,created_date datetime
@@ -168,12 +184,12 @@ id nvarchar(50) not null PRIMARY KEY
 ,created_date datetime
 )
 
+--lookup table of systems, maintained by the Application Groups page
 create table [application_group]
 (
 id nvarchar(50) not null PRIMARY KEY
 ,[application_group_name] nvarchar(128) not null
 ,[description] nvarchar(256) null
-,application_id nvarchar(50) not null
 ,created_by nvarchar(50) null
 ,created_date datetime
 ,updated_by nvarchar(50) null
@@ -181,10 +197,18 @@ id nvarchar(50) not null PRIMARY KEY
 ,is_deleted bit default 0 not null
 )
 
-ALTER TABLE [dbo].applications
-add [application_group_id] nvarchar(50) null --null means standalone / not part of a system
+--which system an application belongs to; no row means the application is standalone
+create table [application_group_applications]
+(
+id nvarchar(50) not null PRIMARY KEY
+,application_group_id nvarchar(50) not null
+,application_id nvarchar(50) not null
+,CONSTRAINT [UQ_application_group_applications_application] UNIQUE ([application_id]) -- one system per application
+,CONSTRAINT [FK_application_group_applications_application_group] FOREIGN KEY ([application_group_id]) REFERENCES [dbo].[application_group] ([id])
+,CONSTRAINT [FK_application_group_applications_applications] FOREIGN KEY ([application_id]) REFERENCES [dbo].[applications] ([id])
+)
 
-ALTER TABLE [dbo].[applications]  WITH CHECK ADD  CONSTRAINT [FK_applications_application_group] FOREIGN KEY([application_group_id])
+ALTER TABLE [dbo].[application_exceptions]  WITH CHECK ADD  CONSTRAINT [FK_application_exceptions_application_group] FOREIGN KEY([application_group_id])
 REFERENCES [dbo].[application_group] ([id])
 
 GO

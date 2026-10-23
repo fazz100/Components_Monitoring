@@ -19,15 +19,19 @@ namespace DAL.Repositories
       {
          try
          {
-            string sql = @"SELECT 
+            // left joins: group-wide exceptions have no application_id
+            string sql = @"SELECT
                                 ae.id
-                                ,application_id
+                                ,ae.application_id
+                                ,ae.application_group_id
                                 ,a.application_name
-                                ,reason_for_exception
-                                ,created_by
-                                ,created_date
+                                ,g.application_group_name as group_name
+                                ,ae.reason_for_exception
+                                ,ae.created_by
+                                ,ae.created_date
                                 FROM application_exceptions ae
-              inner join applications a on a.id=ae.application_id 
+              left join applications a on a.id=ae.application_id
+              left join application_group g on g.id=ae.application_group_id
                                 WHERE ae.id = @id";
 
             return _dapper.Get(sql, new { id = id });
@@ -42,17 +46,22 @@ namespace DAL.Repositories
       {
          try
          {
-            string sql = @"SELECT 
+            // left joins: group-wide exceptions have no application_id (the ExceptionsUpdater must see them too)
+            string sql = @"SELECT
                                 ae.id
                                 ,ae.application_id
+                                ,ae.application_group_id
                                 ,a.application_name
+                                ,g.application_group_name as group_name
                                 ,ae.reason_for_exception
                                 ,ae.created_by
                                 ,ae.created_date
                                 FROM application_exceptions ae
-              inner join applications a on a.id=ae.application_id 
-               where (@appName is null or (@appName is not null and a.application_name like @appName + '%'))
-                                ORDER BY created_date DESC";
+              left join applications a on a.id=ae.application_id
+              left join application_group g on g.id=ae.application_group_id
+               where (@appName is null or (@appName is not null and
+                  (a.application_name like @appName + '%' or g.application_group_name like @appName + '%')))
+                                ORDER BY ae.created_date DESC";
 
             return _dapper.GetAll(sql, new {appName = appName });
          }
@@ -68,16 +77,18 @@ namespace DAL.Repositories
          {
             string sql = @"INSERT INTO application_exceptions 
                                 (
-                                id 
+                                id
                                 ,application_id
+                                ,application_group_id
                                 ,reason_for_exception
                                 ,created_by
                                 ,created_date
-                                ) 
-                                VALUES 
+                                )
+                                VALUES
                                 (
-                                @id 
+                                @id
                                 ,@application_id
+                                ,@application_group_id
                                 ,@reason_for_exception
                                 ,@created_by
                                 ,@created_date

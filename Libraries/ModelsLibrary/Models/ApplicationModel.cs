@@ -23,11 +23,20 @@ namespace ModelsLibrary.Models
 		public DateTime? Updated_Date { get; set; }
 		public string Updated_By { get; set; }
 		public bool Is_Deleted { get; set; }
+		// read from / written to application_group_applications (null = standalone), not a column of applications
 		public string Application_Group_Id { get; set; }
+
+		// alert state, written by the health checker (UpdateAlertState) and cleared by the alert dispatcher
+		public bool Alert_Pending { get; set; }
+		public DateTime? Failure_Detected_At { get; set; } // UTC, first failure of the current outage
+		public string Failure_Details { get; set; }
 
 		// joined from application_group, read only
 		public string Application_Group_Name { get; set; }
 		public bool? Application_Group_Is_Deleted { get; set; }
+
+		// computed by ApplicationRepository.GetPendingAlerts only: true if a direct or group exception is active
+		public bool Is_Silenced { get; set; }
 
 		public List<ApplicationDatabaseModel> Databases { get; set; }
 

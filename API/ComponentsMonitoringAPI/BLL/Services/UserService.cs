@@ -127,7 +127,7 @@ namespace ComponentsMonitoringAPI.BLL.Services
 				_userRepository.Update(model);
 
 			}
-			catch (Exception ex)
+			catch (Exception)
 			{
 				throw;
 			}

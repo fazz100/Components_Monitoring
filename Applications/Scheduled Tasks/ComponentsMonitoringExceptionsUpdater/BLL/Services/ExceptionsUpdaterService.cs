@@ -36,7 +36,7 @@ namespace ComponentsMonitoringExceptionsUpdater.BLL.Services
                var duration = DateTime.UtcNow.Subtract(l.Created_Date);
                if (duration.Days >= daysSilenceDuration)
                {
-                  LOGGER.Info("Removing " + l.Application_Name + " from exceptions list.");
+                  LOGGER.Info("Removing " + (l.Application_Name ?? "system " + l.Group_Name) + " from exceptions list.");
                   _applicationExceptionsRepository.Delete(l.Id);
                }
             }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { 
     getApplications, 
@@ -10,7 +10,7 @@ import {
     testDbConnection 
 } from '../api/application-api'; 
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faEdit, faTrash, faBellSlash, faBell, faSave } from '@fortawesome/free-solid-svg-icons';
+import { faEdit, faTrash, faBellSlash, faBell, faSave, faChevronDown, faChevronRight } from '@fortawesome/free-solid-svg-icons';
 import { createException, getExceptions, deleteException } from '../api/application-exception-api';
 import { getApplicationGroups } from '../api/application-group-api';
 import '../App.css'; 
@@ -27,8 +27,10 @@ function ApplicationList({ type = '' }) {
     const [messageColor, setMessageColor] = useState('');
 
     const [silenceModal, setSilenceModal] = useState(false);
-    const [selectedApp, setSelectedApp] = useState(null);
+    const [silenceTarget, setSilenceTarget] = useState(null); // { type: 'app' | 'group', id, name }
     const [silenceReason, setSilenceReason] = useState('');
+
+    const [collapsedGroups, setCollapsedGroups] = useState(new Set()); // section keys of collapsed application groups
 
     const [viewModal, setViewModal] = useState(false);
     const [selectedViewApp, setSelectedViewApp] = useState(null);
@@ -47,7 +49,7 @@ function ApplicationList({ type = '' }) {
     
     // non async config fetching
     const [config, setConfig] = useState(null);
-    const [isConfigLoading, setIsConfigLoading] = useState(true);
+    const [, setIsConfigLoading] = useState(true);
 
     
     useEffect(() => {
@@ -116,10 +118,17 @@ function ApplicationList({ type = '' }) {
             // ... existing merge logic ...
             const exceptionList = exRes.Data || [];
             setAllExceptions(exceptionList);
-            const mergedApps = (appRes.Data || []).map(app => ({
-                ...app,
-                IsSilenced: exceptionList.some(ex => ex.Application_Id === app.Id)
-            }));
+            const mergedApps = (appRes.Data || []).map(app => {
+                const silencedDirectly = exceptionList.some(ex => ex.Application_Id === app.Id);
+                // a group exception ("Silence System") silences every application in the group
+                const silencedByGroup = !!app.Application_Group_Id
+                    && exceptionList.some(ex => ex.Application_Group_Id === app.Application_Group_Id);
+                return {
+                    ...app,
+                    IsSilenced: silencedDirectly || silencedByGroup,
+                    SilencedByGroup: silencedByGroup && !silencedDirectly
+                };
+            });
             setApps(mergedApps);
 
         } catch (err) { console.error(err); }
@@ -136,8 +145,9 @@ function ApplicationList({ type = '' }) {
         fetchGroups();
     }, []);
 
-    // 1. New state for sorting (default: grouped by application group)
-    const [sortConfig, setSortConfig] = useState({ key: 'Application_Group_Name', direction: 'asc' });
+    // 1. New state for sorting. Rows are always shown in application group sections (see groupSections),
+    // this sorts the rows inside each section; sorting by Application_Group_Name reorders the sections.
+    const [sortConfig, setSortConfig] = useState({ key: 'Application_Name', direction: 'asc' });
 
     // 2. Sorting Logic
     const sortedApps = useMemo(() => {
@@ -192,6 +202,55 @@ function ApplicationList({ type = '' }) {
         return sortableItems;
     }, [apps, sortConfig]);
 
+    // Group Health Rollup: one section per application group, "Individual Applications" (no group) last
+    const groupSections = useMemo(() => {
+        const sectionMap = new Map();
+
+        sortedApps.forEach(app => {
+            const key = app.Application_Group_Id || '';
+            if (!sectionMap.has(key)) {
+                const group = groups.find(g => g.Id === key);
+                sectionMap.set(key, {
+                    key,
+                    groupId: app.Application_Group_Id || null,
+                    name: key ? app.Application_Group_Name : 'Individual Applications',
+                    description: group?.Description || '',
+                    isInactive: !!app.Application_Group_Is_Deleted,
+                    apps: []
+                });
+            }
+            sectionMap.get(key).apps.push(app);
+        });
+
+        const sections = [...sectionMap.values()].map(section => {
+            const exception = section.groupId
+                ? allExceptions.find(ex => ex.Application_Group_Id === section.groupId)
+                : null;
+            return {
+                ...section,
+                downCount: section.apps.filter(a => a.Working_Status === 0).length, // 0 = STATUS.NOT_WORKING
+                exception // the active group exception, if the whole system is silenced
+            };
+        });
+
+        const groupDirection = sortConfig.key === 'Application_Group_Name' && sortConfig.direction === 'desc' ? -1 : 1;
+        sections.sort((a, b) => {
+            if (!a.groupId) return 1;
+            if (!b.groupId) return -1;
+            return groupDirection * (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
+        });
+
+        return sections;
+    }, [sortedApps, groups, allExceptions, sortConfig]);
+
+    const toggleGroupCollapse = (key) => {
+        setCollapsedGroups(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+        });
+    };
+
     // 3. Request Sort Function
     const requestSort = (key) => {
         let direction = 'asc';
@@ -199,12 +258,6 @@ function ApplicationList({ type = '' }) {
             direction = 'desc';
         }
         setSortConfig({ key, direction });
-    };
-
-    // Helper to show sort arrows
-    const getSortIcon = (name) => {
-        if (sortConfig.key !== name) return '↕️';
-        return sortConfig.direction === 'asc' ? '🔼' : '🔽';
     };
 
     // Now this only fires when 'type' changes or the Search button is clicked
@@ -261,7 +314,7 @@ function ApplicationList({ type = '' }) {
             } else {
                 setTestResults(prev => ({ ...prev, [db.Id]: 'Unable to connect' }));
             }
-        } catch (err) {
+        } catch {
             setTestResults(prev => ({ ...prev, [db.Id]: 'Unable to connect' }));
         }
     };
@@ -421,16 +474,24 @@ function ApplicationList({ type = '' }) {
     };
 
     const openSilenceModal = (app) => {
-        setSelectedApp(app);
+        setSilenceTarget({ type: 'app', id: app.Id, name: app.Application_Name });
+        setSilenceReason('');
+        setSilenceModal(true);
+    };
+
+    // "Silence System": one exception for the whole application group
+    const openGroupSilenceModal = (section) => {
+        setSilenceTarget({ type: 'group', id: section.groupId, name: section.name });
         setSilenceReason('');
         setSilenceModal(true);
     };
 
     const handleQuickSilence = async () => {
-        const payload = { 
-            Application_Id: selectedApp.Id, 
-            Reason_For_Exception: silenceReason, 
-            Created_By: 'ADMIN' 
+        const payload = {
+            Application_Id: silenceTarget.type === 'app' ? silenceTarget.id : null,
+            Application_Group_Id: silenceTarget.type === 'group' ? silenceTarget.id : null,
+            Reason_For_Exception: silenceReason,
+            Created_By: 'ADMIN'
         };
         try {
             const res = await createException(payload);
@@ -452,6 +513,20 @@ function ApplicationList({ type = '' }) {
                         alert("Exception removed: Monitoring resumed.");
                         fetchApps();
                     }
+                }
+            } catch (err) {
+                alert("Failed to resume monitoring: " + err.message);
+            }
+        }
+    };
+
+    const handleRemoveGroupSilence = async (section) => {
+        if (window.confirm(`Resume monitoring for all applications in ${section.name}?`)) {
+            try {
+                const res = await deleteException(section.exception.Id);
+                if (res) {
+                    alert("Exception removed: Monitoring resumed for the system.");
+                    fetchApps();
                 }
             } catch (err) {
                 alert("Failed to resume monitoring: " + err.message);
@@ -632,7 +707,8 @@ function ApplicationList({ type = '' }) {
     const silenceModalPortal = silenceModal ? createPortal(
         <div className="modal-overlay">
             <div className="modal-content">
-                <h3>Silence Alerts: {selectedApp?.Application_Name}</h3>
+                <h3>{silenceTarget?.type === 'group' ? 'Silence System' : 'Silence Alerts'}: {silenceTarget?.name}</h3>
+                {silenceTarget?.type === 'group' && <p>All applications in this system will be silenced.</p>}
                 <p>Reason for silencing alerts:</p>
                 <textarea 
                     className="form-control"
@@ -844,8 +920,44 @@ function ApplicationList({ type = '' }) {
                         </tr>
                     </thead>
                     <tbody>
-                        {/* Changed from 'apps.map' to 'sortedApps.map' */}
-                        {sortedApps.map((app) => (
+                        {/* One section per application group: header row (health rollup + actions), then its applications */}
+                        {groupSections.map((section) => (
+                            <Fragment key={section.key || 'individual'}>
+                                <tr className="group-header-row">
+                                    <td colSpan={11}>
+                                        <div className="group-header">
+                                            <FontAwesomeIcon
+                                                icon={collapsedGroups.has(section.key) ? faChevronRight : faChevronDown}
+                                                className="group-toggle"
+                                                title={collapsedGroups.has(section.key) ? "Show components" : "Hide components"}
+                                                onClick={() => toggleGroupCollapse(section.key)}
+                                            />
+                                            <span className="group-name">
+                                                {section.name}{section.isInactive ? ' (inactive)' : ''}
+                                            </span>
+                                            {section.description && <span className="group-description">{section.description}</span>}
+                                            <span
+                                                className={`health-badge ${section.downCount > 0 ? 'degraded' : 'healthy'}`}
+                                                title={`${section.downCount} of ${section.apps.length} component(s) not working`}
+                                            >
+                                                {section.downCount > 0 ? 'DEGRADED' : 'HEALTHY'}
+                                            </span>
+                                            <span className="group-count">{section.downCount} of {section.apps.length} down</span>
+                                            {section.groupId && (
+                                                section.exception ? (
+                                                    <button type="button" className="group-silence-button" onClick={() => handleRemoveGroupSilence(section)}>
+                                                        <FontAwesomeIcon icon={faBell} /> Resume System
+                                                    </button>
+                                                ) : (
+                                                    <button type="button" className="group-silence-button" onClick={() => openGroupSilenceModal(section)}>
+                                                        <FontAwesomeIcon icon={faBellSlash} /> Silence System
+                                                    </button>
+                                                )
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                                {!collapsedGroups.has(section.key) && section.apps.map((app) => (
                             <tr key={app.Id}>
                                 <td>
                                     <span className="app-link" onClick={() => openViewModal(app)} style={{ color: '#007bff', cursor: 'pointer', textDecoration: 'none', fontWeight: 'bold' }}>
@@ -872,14 +984,25 @@ function ApplicationList({ type = '' }) {
                                 <td style={{ textAlign: 'center', minWidth:'100px' }}>
                                     <FontAwesomeIcon icon={faEdit} style={{ cursor: 'pointer', marginRight: '12px', color: '#3498db' }} title="Edit" onClick={() => openEditModal(app)} />
                                     <FontAwesomeIcon icon={faTrash} style={{ color: '#e74c3c', cursor: 'pointer', marginRight: '12px' }} title="Delete" onClick={() => handleDelete(app.Id)} />
-                                    <FontAwesomeIcon 
-                                        icon={app.IsSilenced ? faBellSlash : faBell} 
-                                        title={app.IsSilenced ? "Resume Monitoring" : "Silence Alerts"}
-                                        style={{ color: app.IsSilenced ? '#f39c12' : '#2ecc71', cursor: 'pointer' }} 
-                                        onClick={() => app.IsSilenced ? handleRemoveSilence(app.Id) : openSilenceModal(app)} 
-                                    />
+                                    {app.SilencedByGroup ? (
+                                        // silenced through its group: resume from the group header ("Resume System")
+                                        <FontAwesomeIcon
+                                            icon={faBellSlash}
+                                            title={`Silenced with system ${app.Application_Group_Name}`}
+                                            style={{ color: '#f39c12', cursor: 'default' }}
+                                        />
+                                    ) : (
+                                        <FontAwesomeIcon
+                                            icon={app.IsSilenced ? faBellSlash : faBell}
+                                            title={app.IsSilenced ? "Resume Monitoring" : "Silence Alerts"}
+                                            style={{ color: app.IsSilenced ? '#f39c12' : '#2ecc71', cursor: 'pointer' }}
+                                            onClick={() => app.IsSilenced ? handleRemoveSilence(app.Id) : openSilenceModal(app)}
+                                        />
+                                    )}
                                 </td>
                             </tr>
+                                ))}
+                            </Fragment>
                         ))}
                     </tbody>
                 </table>
