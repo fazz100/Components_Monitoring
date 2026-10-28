@@ -25,6 +25,8 @@ namespace ComponentsMonitoringAPI.Controllers
       [HttpPost]
       [Route("api/applications/create")]
       public IHttpActionResult Create(ApplicationModel model) => TryCatchWrapper(() => {
+         if (model == null) throw new ArgumentNullException(nameof(model), "Request body is missing or is not valid JSON.");
+
          string userId = CurrentUserId;
 
          model.Id = Guid.NewGuid().ToString(); 
